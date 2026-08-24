@@ -1,0 +1,19 @@
+# 产物目录
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 缓存 / 工具
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.remember/
+.claude/
+
+# 系统
+.DS_Store

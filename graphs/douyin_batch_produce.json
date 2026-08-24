@@ -1,0 +1,91 @@
+{
+  "name": "douyin_batch_produce",
+  "description": "抖音批量造片单轮：脚本→搜 NASA 真实天体图→(真实图足够走真实/不足回退生成图)→配音→合成→入库待发（真实图优先，runner 外层循环 N 次实现批量，每轮由 runner 注入 topic/series/hook_type）",
+  "start_node_id": "start",
+  "version": "1.1",
+  "agent_id": "c65efddbe8c5",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {"type": "start", "label": "开始"},
+    "script": {
+      "type": "tool",
+      "label": "生成脚本",
+      "tool_name": "mlx_script",
+      "tool_params": {
+        "topic": "{{topic}}",
+        "series": "{{series}}",
+        "hook_type": "{{hook_type}}",
+        "hook_variant": "{{hook_variant}}",
+        "output_mapping": {"result": "script_json"}
+      }
+    },
+    "web_img": {
+      "type": "tool",
+      "label": "搜真实天体图",
+      "tool_name": "web_image_search",
+      "tool_params": {
+        "queries": "{{script_json}}",
+        "output_mapping": {"image_paths": "image_paths", "enough": "enough"}
+      }
+    },
+    "gate_web": {
+      "type": "condition",
+      "label": "真实图足够",
+      "condition_expr": "enough == true"
+    },
+    "img_gen": {
+      "type": "tool",
+      "label": "生成配图(回退)",
+      "tool_name": "comfyui_image",
+      "tool_params": {
+        "prompts": "{{script_json}}",
+        "output_mapping": {"image_paths": "image_paths"}
+      }
+    },
+    "tts": {
+      "type": "tool",
+      "label": "配音",
+      "tool_name": "comfyui_tts",
+      "tool_params": {
+        "text": "{{script_json}}",
+        "out_name": "batch_{{topic}}",
+        "output_mapping": {"audio_path": "audio_path"}
+      }
+    },
+    "compose": {
+      "type": "tool",
+      "label": "合成视频",
+      "tool_name": "ffmpeg_compose",
+      "tool_params": {
+        "image_paths": "{{image_paths}}",
+        "audio_path": "{{audio_path}}",
+        "scenes": "{{script_json}}",
+        "out_name": "batch_{{topic}}",
+        "output_mapping": {"video_path": "video_path"}
+      }
+    },
+    "enqueue": {
+      "type": "tool",
+      "label": "入库待发",
+      "tool_name": "queue_ops",
+      "tool_params": {
+        "action": "enqueue",
+        "video_path": "{{video_path}}",
+        "script_json": "{{script_json}}",
+        "topic": "{{topic}}"
+      }
+    },
+    "end": {"type": "end", "label": "结束"}
+  },
+  "edges": [
+    {"source_id": "start", "target_id": "script"},
+    {"source_id": "script", "target_id": "web_img"},
+    {"source_id": "web_img", "target_id": "gate_web"},
+    {"source_id": "gate_web", "target_id": "tts", "label": "true"},
+    {"source_id": "gate_web", "target_id": "img_gen", "label": "false"},
+    {"source_id": "img_gen", "target_id": "tts"},
+    {"source_id": "tts", "target_id": "compose"},
+    {"source_id": "compose", "target_id": "enqueue"},
+    {"source_id": "enqueue", "target_id": "end"}
+  ]
+}

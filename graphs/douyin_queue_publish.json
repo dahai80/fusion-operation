@@ -1,0 +1,139 @@
+{
+  "name": "douyin_queue_publish",
+  "description": "抖音库存发布：先检查是否高峰时段(12-13/19-21)→高峰则取库存发布→发布成功归档/失败留pending；非高峰或无库存则结束(延后到下个窗口)。runner 外层循环实现日上限 N 条",
+  "start_node_id": "start",
+  "version": "2.0",
+  "agent_id": "c65efddbe8c5",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {
+      "type": "start",
+      "label": "开始"
+    },
+    "scheduler": {
+      "type": "tool",
+      "label": "检查发布时段",
+      "tool_name": "publish_scheduler",
+      "tool_params": {
+        "output_mapping": {
+          "in_peak": "in_peak",
+          "should_wait": "should_wait",
+          "next_window": "next_window"
+        }
+      }
+    },
+    "gate_peak": {
+      "type": "condition",
+      "label": "在高峰时段",
+      "condition_expr": "in_peak == true"
+    },
+    "dequeue": {
+      "type": "tool",
+      "label": "取库存",
+      "tool_name": "queue_ops",
+      "tool_params": {
+        "action": "dequeue",
+        "output_mapping": {
+          "has_stock": "has_stock",
+          "video_path": "video_path",
+          "script_json": "script_json",
+          "title": "title",
+          "desc_text": "desc_text",
+          "item_id": "item_id"
+        }
+      }
+    },
+    "gate_stock": {
+      "type": "condition",
+      "label": "有库存",
+      "condition_expr": "has_stock == true"
+    },
+    "publish": {
+      "type": "tool",
+      "label": "发布",
+      "tool_name": "douyin_publish",
+      "tool_params": {
+        "video_path": "{{video_path}}",
+        "description": "{{desc_text}}",
+        "title": "{{title}}",
+        "dry_run": "{{dry_run}}",
+        "output_mapping": {
+          "status": "publish_status",
+          "vid": "vid"
+        }
+      }
+    },
+    "gate_ok": {
+      "type": "condition",
+      "label": "发布成功",
+      "condition_expr": "publish_status == publish_ok"
+    },
+    "archive": {
+      "type": "tool",
+      "label": "归档",
+      "tool_name": "queue_ops",
+      "tool_params": {
+        "action": "archive",
+        "item_id": "{{item_id}}",
+        "status": "published",
+        "vid": "{{vid}}"
+      }
+    },
+    "end": {
+      "type": "end",
+      "label": "结束"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "start",
+      "target_id": "scheduler"
+    },
+    {
+      "source_id": "scheduler",
+      "target_id": "gate_peak"
+    },
+    {
+      "source_id": "gate_peak",
+      "target_id": "dequeue",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_peak",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "dequeue",
+      "target_id": "gate_stock"
+    },
+    {
+      "source_id": "gate_stock",
+      "target_id": "publish",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_stock",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "publish",
+      "target_id": "gate_ok"
+    },
+    {
+      "source_id": "gate_ok",
+      "target_id": "archive",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_ok",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "archive",
+      "target_id": "end"
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "models": {
+    "chat": "Qwen3.5-9B-4bit",
+    "tts": "kokoro",
+    "tts_voice": "af_heart",
+    "image": "flux-2"
+  },
+  "comfyui": {
+    "base": "http://127.0.0.1:11445",
+    "timeout": 300,
+    "output_dir": "/Users/dahai/fusion/fusion-comfyui/ComfyUI/output",
+    "image_model": "flux2-klein-4b.safetensors",
+    "tts_model": "mlx-community/Kokoro-82M-bf16",
+    "tts_backend": "http",
+    "tts_http_model": "Qwen3-TTS-12Hz-1.7B-Base-8bit",
+    "tts_http_voice": "Cherry"
+  },
+  "mlx": {
+    "base": "http://localhost:11434",
+    "timeout": 300,
+    "settings_path": "~/.fusion-mlx/settings.json"
+  },
+  "paths": {
+    "video_dir": "/Users/dahai/fusion/fusion-operation/out/videos",
+    "audio_dir": "/Users/dahai/fusion/fusion-operation/out/audio",
+    "image_dir": "/Users/dahai/fusion/fusion-operation/out/images",
+    "fallback_image_dir": "/Users/dahai/video/images/hq",
+    "ops_data_dir": "/Users/dahai/fusion/fusion-operation/out/ops",
+    "queue_dir": "/Users/dahai/fusion/fusion-operation/out/queue",
+    "topics_file": "/Users/dahai/fusion/fusion-operation/out/queue/topics.json",
+    "douyin_profile": "/Users/dahai/video/douyin_profile"
+  },
+  "agent_studio": {
+    "socket": "/tmp/fusion-studio.sock",
+    "agent_id": "c65efddbe8c5",
+    "tool_config": {
+      "mlx_script": {
+        "model": "models.chat"
+      },
+      "mlx_reply_draft": {
+        "model": "models.chat"
+      },
+      "perf_analyze": {
+        "model": "models.chat"
+      },
+      "self_repair": {
+        "model": "models.chat"
+      },
+      "topic_gen": {
+        "model": "models.chat"
+      },
+      "comfyui_tts": {
+        "voice": "comfyui.tts_http_voice"
+      }
+    }
+  },
+  "script": {
+    "max_scenes": 5,
+    "hook_variants": {
+      "A": "数字+反常：首句用一个极端数字搭配反常识结论",
+      "B": "提问+代入：首句用第二人称提问把观众代入场景",
+      "C": "悬念+冲突：首句抛出一个待解的悬念冲突"
+    }
+  },
+  "scheduler": {
+    "peak_windows": [
+      "9-10",
+      "11-12",
+      "14-15",
+      "18-19"
+    ]
+  },
+  "self_repair": {
+    "cold_plays_threshold": 100,
+    "cold_interaction_rate_threshold": 0.01,
+    "cold_age_hours": 72
+  },
+  "perf_track": {
+    "hot_top_percent": 0.2,
+    "hot_plays_min": 100,
+    "cold_plays_max": 50,
+    "max_history_per_vid": 40
+  },
+  "video": {
+    "fps": 24,
+    "width": 1080,
+    "height": 1920,
+    "font_path": ""
+  },
+  "web_image": {
+    "nasa_api_base": "https://images-api.nasa.gov",
+    "timeout": 20,
+    "per_query": 1,
+    "celestial_terms": [
+      "jupiter",
+      "mars",
+      "earth",
+      "saturn",
+      "neptune",
+      "uranus",
+      "venus",
+      "mercury",
+      "moon",
+      "sun",
+      "solar",
+      "nebula",
+      "galaxy",
+      "black hole",
+      "milky way",
+      "aurora",
+      "comet",
+      "asteroid",
+      "supernova",
+      "quasar",
+      "pulsar",
+      "star",
+      "exoplanet",
+      "cosmos",
+      "orbit",
+      "eclipse",
+      "meteor",
+      "dwarf planet",
+      "red giant",
+      "white dwarf",
+      "neutron star",
+      "accretion disk",
+      "event horizon"
+    ]
+  }
+}

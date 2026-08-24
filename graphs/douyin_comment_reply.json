@@ -1,0 +1,87 @@
+{
+  "name": "douyin_comment_reply",
+  "description": "抖音评论运营：抓取新评论→AI 草拟回复→批量点赞+回复(含幂等与安全过滤)",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "c65efddbe8c5",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {
+      "type": "start",
+      "label": "开始"
+    },
+    "fetch": {
+      "type": "tool",
+      "tool_name": "douyin_fetch_comments",
+      "label": "抓取评论",
+      "tool_params": {
+        "aweme_title": "",
+        "limit": 5,
+        "dry_run": false,
+        "output_mapping": {
+          "comments": "comments_json",
+          "has_new": "has_new"
+        }
+      }
+    },
+    "gate_has_new": {
+      "type": "condition",
+      "label": "是否有新评论",
+      "condition_expr": "has_new == true"
+    },
+    "draft": {
+      "type": "tool",
+      "tool_name": "mlx_reply_draft",
+      "label": "草拟回复",
+      "tool_params": {
+        "comments_json": "{{comments_json}}",
+        "account_role": "科普博主",
+        "output_mapping": {
+          "drafts": "drafts_json"
+        }
+      }
+    },
+    "reply": {
+      "type": "tool",
+      "tool_name": "douyin_reply",
+      "label": "点赞+回复",
+      "tool_params": {
+        "drafts_json": "{{drafts_json}}",
+        "max_reply": 5,
+        "dry_run": false
+      }
+    },
+    "end": {
+      "type": "end",
+      "label": "结束"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "start",
+      "target_id": "fetch"
+    },
+    {
+      "source_id": "fetch",
+      "target_id": "gate_has_new"
+    },
+    {
+      "source_id": "gate_has_new",
+      "target_id": "draft",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_has_new",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "draft",
+      "target_id": "reply"
+    },
+    {
+      "source_id": "reply",
+      "target_id": "end"
+    }
+  ]
+}

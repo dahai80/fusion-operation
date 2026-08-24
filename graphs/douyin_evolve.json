@@ -1,0 +1,72 @@
+{
+  "name": "douyin_evolve",
+  "description": "视频进化复盘 OODA 闭环：snapshot 采集快照落盘 → rank 排行分类 → perf_analyze 模型提取爆款模式落盘 winning_patterns.json → self_repair scan 扫差片候选。每日发布后跑一次",
+  "start_node_id": "start",
+  "version": "2.0",
+  "agent_id": "c65efddbe8c5",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {
+      "type": "start",
+      "label": "开始"
+    },
+    "snapshot": {
+      "type": "tool",
+      "label": "采集快照",
+      "tool_name": "perf_track",
+      "tool_params": {
+        "action": "snapshot"
+      }
+    },
+    "rank": {
+      "type": "tool",
+      "label": "排行分类",
+      "tool_name": "perf_track",
+      "tool_params": {
+        "action": "rank"
+      }
+    },
+    "analyze": {
+      "type": "tool",
+      "label": "归因提取爆款模式",
+      "tool_name": "perf_analyze",
+      "tool_params": {
+        "min_samples": 5
+      }
+    },
+    "repair_scan": {
+      "type": "tool",
+      "label": "扫差片候选",
+      "tool_name": "self_repair",
+      "tool_params": {
+        "action": "scan"
+      }
+    },
+    "end": {
+      "type": "end",
+      "label": "结束"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "start",
+      "target_id": "snapshot"
+    },
+    {
+      "source_id": "snapshot",
+      "target_id": "rank"
+    },
+    {
+      "source_id": "rank",
+      "target_id": "analyze"
+    },
+    {
+      "source_id": "analyze",
+      "target_id": "repair_scan"
+    },
+    {
+      "source_id": "repair_scan",
+      "target_id": "end"
+    }
+  ]
+}

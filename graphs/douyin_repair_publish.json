@@ -1,0 +1,69 @@
+{
+  "name": "douyin_repair_publish",
+  "description": "差片修复重发：scan 扫 72h 差片候选 → 有候选则 retitle 换标题+描述重入 pending（下个高峰 Graph D 发）→ 无候选则结束。runner else 分支 run_once",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "c65efddbe8c5",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {
+      "type": "start",
+      "label": "开始"
+    },
+    "scan": {
+      "type": "tool",
+      "label": "扫差片候选",
+      "tool_name": "self_repair",
+      "tool_params": {
+        "action": "scan",
+        "output_mapping": {
+          "has_candidate": "has_candidate",
+          "first_vid": "first_vid",
+          "count": "candidate_count"
+        }
+      }
+    },
+    "gate_candidate": {
+      "type": "condition",
+      "label": "有修复候选",
+      "condition_expr": "has_candidate == true"
+    },
+    "retitle": {
+      "type": "tool",
+      "label": "换标题重发",
+      "tool_name": "self_repair",
+      "tool_params": {
+        "action": "retitle",
+        "vid": "{{first_vid}}"
+      }
+    },
+    "end": {
+      "type": "end",
+      "label": "结束"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "start",
+      "target_id": "scan"
+    },
+    {
+      "source_id": "scan",
+      "target_id": "gate_candidate"
+    },
+    {
+      "source_id": "gate_candidate",
+      "target_id": "retitle",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_candidate",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "retitle",
+      "target_id": "end"
+    }
+  ]
+}

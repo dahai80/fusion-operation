@@ -1,0 +1,271 @@
+{
+  "name": "douyin_auto_publish",
+  "description": "抖音自动发布（cron 调度）：高峰时段取库存发布→成功归档；库存为空则 topic_gen 自产选题→脚本→配图→配音→合成→入库→重新取片发布；非高峰则结束延后。补货分支 topic/series/hook_variant 由 topic_gen 内部产出注入, 不依赖外部 cron 传参 (修 C1: cron 路径不传 topic 致补货永久失败)。",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "c65efddbe8c5",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {
+      "type": "start",
+      "label": "开始"
+    },
+    "scheduler": {
+      "type": "tool",
+      "label": "检查发布时段",
+      "tool_name": "publish_scheduler",
+      "tool_params": {
+        "output_mapping": {
+          "in_peak": "in_peak",
+          "should_wait": "should_wait",
+          "next_window": "next_window"
+        }
+      }
+    },
+    "gate_peak": {
+      "type": "condition",
+      "label": "在高峰时段",
+      "condition_expr": "in_peak == true"
+    },
+    "dequeue": {
+      "type": "tool",
+      "label": "取库存",
+      "tool_name": "queue_ops",
+      "tool_params": {
+        "action": "dequeue",
+        "output_mapping": {
+          "has_stock": "has_stock",
+          "video_path": "video_path",
+          "script_json": "script_json",
+          "title": "title",
+          "desc_text": "desc_text",
+          "item_id": "item_id"
+        }
+      }
+    },
+    "gate_stock": {
+      "type": "condition",
+      "label": "有库存",
+      "condition_expr": "has_stock == true"
+    },
+    "gate_refill_budget": {
+      "type": "condition",
+      "label": "补货次数未超限(防无限循环)",
+      "condition_expr": "iteration < 23"
+    },
+    "topic_gen": {
+      "type": "tool",
+      "label": "自产选题(补货首节点)",
+      "tool_name": "topic_gen",
+      "tool_params": {
+        "count": 1,
+        "output_mapping": {
+          "topic": "topic",
+          "series": "series",
+          "hook_variant": "hook_variant",
+          "hook_type": "hook_type"
+        }
+      }
+    },
+    "script": {
+      "type": "tool",
+      "label": "生成脚本(补货)",
+      "tool_name": "mlx_script",
+      "tool_params": {
+        "topic": "{{topic}}",
+        "series": "{{series}}",
+        "hook_variant": "{{hook_variant}}",
+        "output_mapping": {
+          "result": "script_json"
+        }
+      }
+    },
+    "img": {
+      "type": "tool",
+      "label": "配图(补货)",
+      "tool_name": "comfyui_image",
+      "tool_params": {
+        "prompts": "{{script_json}}",
+        "output_mapping": {
+          "image_paths": "image_paths"
+        }
+      }
+    },
+    "tts": {
+      "type": "tool",
+      "label": "配音(补货)",
+      "tool_name": "comfyui_tts",
+      "tool_params": {
+        "text": "{{script_json}}",
+        "out_name": "",
+        "output_mapping": {
+          "audio_path": "audio_path"
+        }
+      }
+    },
+    "compose": {
+      "type": "tool",
+      "label": "合成视频(补货)",
+      "tool_name": "ffmpeg_compose",
+      "tool_params": {
+        "image_paths": "{{image_paths}}",
+        "audio_path": "{{audio_path}}",
+        "scenes": "{{script_json}}",
+        "out_name": "",
+        "output_mapping": {
+          "video_path": "video_path"
+        }
+      }
+    },
+    "enqueue": {
+      "type": "tool",
+      "label": "入库待发(补货)",
+      "tool_name": "queue_ops",
+      "tool_params": {
+        "action": "enqueue",
+        "video_path": "{{video_path}}",
+        "script_json": "{{script_json}}",
+        "topic": "{{topic}}",
+        "output_mapping": {
+          "status": "enqueued_status"
+        }
+      }
+    },
+    "gate_refilled": {
+      "type": "condition",
+      "label": "补货成功",
+      "condition_expr": "enqueued_status == enqueued"
+    },
+    "publish": {
+      "type": "tool",
+      "label": "发布",
+      "tool_name": "douyin_publish",
+      "tool_params": {
+        "video_path": "{{video_path}}",
+        "description": "{{desc_text}}",
+        "title": "{{title}}",
+        "dry_run": "{{dry_run}}",
+        "output_mapping": {
+          "status": "publish_status",
+          "vid": "vid"
+        }
+      }
+    },
+    "gate_ok": {
+      "type": "condition",
+      "label": "发布成功",
+      "condition_expr": "publish_status == publish_ok"
+    },
+    "archive": {
+      "type": "tool",
+      "label": "归档",
+      "tool_name": "queue_ops",
+      "tool_params": {
+        "action": "archive",
+        "item_id": "{{item_id}}",
+        "status": "published",
+        "vid": "{{vid}}"
+      }
+    },
+    "end": {
+      "type": "end",
+      "label": "结束"
+    }
+  },
+  "edges": [
+    {
+      "source_id": "start",
+      "target_id": "scheduler"
+    },
+    {
+      "source_id": "scheduler",
+      "target_id": "gate_peak"
+    },
+    {
+      "source_id": "gate_peak",
+      "target_id": "dequeue",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_peak",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "dequeue",
+      "target_id": "gate_stock"
+    },
+    {
+      "source_id": "gate_stock",
+      "target_id": "publish",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_stock",
+      "target_id": "gate_refill_budget",
+      "label": "false"
+    },
+    {
+      "source_id": "gate_refill_budget",
+      "target_id": "topic_gen",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_refill_budget",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "topic_gen",
+      "target_id": "script"
+    },
+    {
+      "source_id": "script",
+      "target_id": "img"
+    },
+    {
+      "source_id": "img",
+      "target_id": "tts"
+    },
+    {
+      "source_id": "tts",
+      "target_id": "compose"
+    },
+    {
+      "source_id": "compose",
+      "target_id": "enqueue"
+    },
+    {
+      "source_id": "enqueue",
+      "target_id": "gate_refilled"
+    },
+    {
+      "source_id": "gate_refilled",
+      "target_id": "dequeue",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_refilled",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "publish",
+      "target_id": "gate_ok"
+    },
+    {
+      "source_id": "gate_ok",
+      "target_id": "archive",
+      "label": "true"
+    },
+    {
+      "source_id": "gate_ok",
+      "target_id": "end",
+      "label": "false"
+    },
+    {
+      "source_id": "archive",
+      "target_id": "end"
+    }
+  ]
+}

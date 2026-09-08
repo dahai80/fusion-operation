@@ -5,7 +5,8 @@ import os
 
 from tools.base import BaseTool
 
-from .config import DOUYIN_PROFILE, DOUYIN_COMMENT_URL, OPS_DATA_DIR
+from .config import DOUYIN_COMMENT_URL, OPS_DATA_DIR
+from .playwright_profile import profile_lock, launch_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -64,38 +65,42 @@ class DouyinReplyTool(BaseTool):
         liked = 0
         # claimed 的 cid 已在 _claim_replied 内持久化落盘 (幂等), 即便本次 reply 中途失败,
         # 下次 cron 也不会重复回复这些 cid. 回复失败仅记 skipped, 不回滚 claim (宁可漏回复不重复回复).
+        ctx = None
         try:
-            async with async_playwright() as p:
-                ctx = await p.chromium.launch_persistent_context(
-                    DOUYIN_PROFILE, headless=headless
-                )
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                logger.info("[reply] open comment manage page")
-                await page.goto(DOUYIN_COMMENT_URL, timeout=30000)
-                await asyncio.sleep(8)
-                if "扫码登录" in await page.inner_text("body"):
-                    logger.warning("session expired at reply")
-                    await ctx.close()
-                    return json.dumps({"error": "session expired"})
-                await self._click_text(page, SEL_SELECT_WORK)
-                await asyncio.sleep(6)
-                if aweme_title:
-                    await self._click_work(page, aweme_title)
+            with profile_lock():
+                async with async_playwright() as p:
+                    ctx = await launch_with_retry(p, headless)
+                    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                    logger.info("[reply] open comment manage page")
+                    await page.goto(DOUYIN_COMMENT_URL, timeout=30000)
                     await asyncio.sleep(8)
-                for i, d in enumerate(todo):
-                    key = d.get("comment_text", "") or d.get("text", "")
-                    cid = d.get("id", "")
-                    ok_like = await self._like_comment(page, key)
-                    if ok_like:
-                        liked += 1
-                    ok = await self._reply_comment(page, key, d.get("text", ""))
-                    if ok:
-                        replied.append(cid)
-                        await asyncio.sleep(4)
-                    else:
-                        skipped += 1
-                        logger.warning("reply failed id=%s text=%.30s", cid, key)
-                await ctx.close()
+                    if "扫码登录" in await page.inner_text("body"):
+                        logger.warning("session expired at reply")
+                        return json.dumps({"error": "session expired"})
+                    await self._click_text(page, SEL_SELECT_WORK)
+                    await asyncio.sleep(6)
+                    if aweme_title:
+                        await self._click_work(page, aweme_title)
+                        await asyncio.sleep(8)
+                    for i, d in enumerate(todo):
+                        key = d.get("comment_text", "") or d.get("text", "")
+                        cid = d.get("id", "")
+                        # 审计 P2-16: 旧单条评论 raise 中断整批, 已 claim 的 cid 永不重试.
+                        # per-comment try/except, 失败记 skipped 继续, 整批不被一条带崩.
+                        try:
+                            ok_like = await self._like_comment(page, key)
+                            if ok_like:
+                                liked += 1
+                            ok = await self._reply_comment(page, key, d.get("text", ""))
+                            if ok:
+                                replied.append(cid)
+                                await asyncio.sleep(4)
+                            else:
+                                skipped += 1
+                                logger.warning("reply failed id=%s text=%.30s", cid, key)
+                        except Exception as ce:
+                            skipped += 1
+                            logger.warning("reply per-comment error id=%s: %s", cid, ce)
             logger.info("douyin_reply done replied=%d liked=%d skipped=%d", len(replied), liked, skipped)
             return json.dumps(
                 {"replied": replied, "liked": liked, "skipped": skipped, "todo": len(todo)},
@@ -104,6 +109,14 @@ class DouyinReplyTool(BaseTool):
         except Exception as e:
             logger.exception("douyin_reply failed")
             return json.dumps({"error": str(e)})
+        finally:
+            # 审计 0906 P1-2: 异常路径不释放 ctx -> Chrome 持 profile 独占锁 -> 下次 launch TargetClosedError.
+            # 统一 finally close, 对齐 douyin_publish/douyin_self_comment 模式.
+            if ctx is not None:
+                try:
+                    await ctx.close()
+                except Exception as ce:
+                    logger.warning("reply ctx.close on finally failed: %s", ce)
 
     async def _click_text(self, page, text):
         await page.evaluate(

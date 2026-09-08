@@ -6,7 +6,8 @@ import re
 
 from tools.base import BaseTool
 
-from .config import DOUYIN_PROFILE, DOUYIN_MANAGE_URL, DOUYIN_HOME_URL
+from .config import DOUYIN_MANAGE_URL, DOUYIN_HOME_URL
+from .playwright_profile import profile_lock, launch_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -39,24 +40,26 @@ class DouyinStatsTool(BaseTool):
             logger.error("playwright not installed")
             return json.dumps({"error": "playwright not installed"})
         try:
-            async with async_playwright() as p:
-                ctx = await p.chromium.launch_persistent_context(
-                    DOUYIN_PROFILE, headless=headless
-                )
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                logger.info("[stats] open manage page ensure login")
-                await page.goto(DOUYIN_MANAGE_URL, timeout=30000)
-                await asyncio.sleep(6)
-                if "扫码登录" in await page.inner_text("body"):
-                    logger.warning("session expired at stats")
+            with profile_lock():
+                async with async_playwright() as p:
+                    ctx = await launch_with_retry(p, headless)
+                    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                    logger.info("[stats] open manage page ensure login")
+                    await page.goto(DOUYIN_MANAGE_URL, timeout=30000)
+                    await asyncio.sleep(6)
+                    if "扫码登录" in await page.inner_text("body"):
+                        logger.warning("session expired at stats")
+                        await ctx.close()
+                        return json.dumps({"error": "session expired"})
+                    items = await self._fetch_items(page)
+                    if aweme_id:
+                        items = [i for i in items if i.get("vid") == aweme_id]
+                    acc = await self._fetch_account(page)
                     await ctx.close()
-                    return json.dumps({"error": "session expired"})
-                items = await self._fetch_items(page)
-                if aweme_id:
-                    items = [i for i in items if i.get("vid") == aweme_id]
-                acc = await self._fetch_account(page)
-                await ctx.close()
-            fetched_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # 审计 0906 P3-6: datetime.datetime.now() naive 本地 tz, daemon launchd 下可能非 CST
+            # -> fetched_at 与 stats_history 墙钟错位 8h. 用 perf_track.CST 固定 UTC+8 tz-aware.
+            from .perf_track import CST
+            fetched_at = datetime.datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
             logger.info("douyin_stats done items=%d followers=%s", len(items), acc.get("followers_raw"))
             return json.dumps(
                 {"fetched_at": fetched_at, "account": acc, "items": items},
@@ -69,7 +72,14 @@ class DouyinStatsTool(BaseTool):
     async def _fetch_items(self, page):
         items = []
         cursor = ""
-        for _ in range(10):
+        # 审计 P3-15: 旧 range(10) × limit=20 = 硬上限 200, 账号 >200 视频静默截断
+        # -> stats/rank/进化数据只覆盖最近 200 条, 早期作品永久盲区. 改分页全量 +
+        # 安全上限 1000 (50 页) + 命中上限显式 warning (不再静默).
+        MAX_PAGES = 50
+        page_idx = 0
+        truncated = False
+        while page_idx < MAX_PAGES:
+            page_idx += 1
             result = await page.evaluate(
                 """async (c) => {
                 const r = await fetch('https://creator.douyin.com/aweme/v1/creator/item/list?cursor='+c+'&aid=2906&limit=20', {
@@ -82,7 +92,7 @@ class DouyinStatsTool(BaseTool):
             try:
                 data = json.loads(result)
             except (ValueError, TypeError):
-                logger.warning("item list parse failed")
+                logger.warning("item list parse failed at page=%d", page_idx)
                 break
             batch = data.get("item_info_list", [])
             for v in batch:
@@ -98,7 +108,16 @@ class DouyinStatsTool(BaseTool):
             cursor = data.get("cursor", "")
             if not data.get("has_more"):
                 break
+            if page_idx >= MAX_PAGES:
+                truncated = True
+                logger.warning(
+                    "douyin_stats item list hit MAX_PAGES=%d (~%d items), "
+                    "has_more still true -> TRUNCATED, account has more videos",
+                    MAX_PAGES, len(items),
+                )
+                break
             await asyncio.sleep(1.5)
+        logger.info("douyin_stats fetched items=%d pages=%d truncated=%s", len(items), page_idx, truncated)
         await self._scroll_manage_page(page)
         page_stats = await self._fetch_page_stats(page)
         if page_stats:
@@ -217,14 +236,37 @@ class DouyinStatsTool(BaseTool):
 
     @staticmethod
     def _match_page_stats(title, page_stats):
+        # 审计 P2-17: 旧首 12 字符前缀匹配, 共享前缀标题交叉串属性 -> stats 数据污染.
+        # 改: 完整标题精确匹配优先; 无精确命中再走前缀, 但前缀长度提到 20 + 必须一方是另一方前缀
+        # (避免短公共前缀误连). 仍找不到返回 None.
         if not title or not page_stats:
             return None
+        norm = lambda s: "".join(s.split()).strip()
+        nt = norm(title)
+        if not nt:
+            return None
+        # 1. 精确 (归一化后) 匹配.
         for st in page_stats:
-            ps = st.get("title", "")
+            ps = norm(st.get("title", ""))
+            if ps and ps == nt:
+                return st
+        # 2. 前缀匹配: 一方是另一方前缀, 且公共部分 >= 较短标题 80% (审计 P2-17).
+        # 旧首 12 字符硬前缀 -> 同系列短公共前缀标题交叉串属性. 比例阈值既允许
+        # 合法前缀截断匹配 (页面标题是抖音完整标题的前缀, common/short≈1.0),
+        # 又拒绝两段不同长标题仅共享短前缀 (common/short<0.8).
+        for st in page_stats:
+            ps = norm(st.get("title", ""))
             if not ps:
                 continue
-            n = min(len(ps), len(title), 12)
-            if n > 0 and ps[:n] == title[:n]:
+            if not (ps.startswith(nt) or nt.startswith(ps)):
+                continue
+            common = min(len(ps), len(nt))
+            short = min(len(ps), len(nt))
+            # 页面标题常是抖音完整标题前缀 (short<<long), common/short≈1.0 合法匹配;
+            # 两段不同长标题仅共享短前缀时 common/short<0.8 拒绝 (避免交叉串属性).
+            # 但 short 本身极短 (<8) 共享前缀无统计意义, 需同时要求 common >= 8 防 "宇宙" 误连.
+            if short > 0 and common / short >= 0.8 and common >= 8:
+                logger.warning("douyin_stats prefix-match (not exact) title=%.30s page=%.30s", title, st.get("title", ""))
                 return st
         return None
 

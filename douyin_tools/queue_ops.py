@@ -2,13 +2,14 @@ import fcntl
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import contextmanager
 
 from tools.base import BaseTool
 
-from .config import QUEUE_DIR, ensure_dirs
+from .config import QUEUE_DIR, ensure_dirs, LEASE_TTL
 from .script_helpers import parse_script
 
 logger = logging.getLogger(__name__)
@@ -16,15 +17,13 @@ logger = logging.getLogger(__name__)
 # 节点标识: 多节点部署时每节点独立 id, dequeue 写 leased_by 标记归属, archive 前校验.
 # 单节点默认空串 (本地锁已足够防并发, lease 仅作崩溃恢复用). DOUYIN_NODE_ID 环境变量覆盖.
 NODE_ID = os.environ.get("DOUYIN_NODE_ID", "")
-# lease 时长 (秒): dequeue 后 5 分钟内未 archive 视为崩溃/超时, 下一轮 dequeue 可抢占回收.
-LEASE_TTL = int(os.environ.get("DOUYIN_LEASE_TTL", "300"))
 
 
 class QueueOpsTool(BaseTool):
     name = "queue_ops"
     description = "视频库存队列操作：enqueue 入库待发 / dequeue 取一条待发(原子移入 in-flight) / archive 归档已发+失败回收 / count 统计库存。文件锁防并发竞态"
     parameters = {
-        "action": {"type": "string", "description": "enqueue|dequeue|archive|count"},
+        "action": {"type": "string", "description": "enqueue|dequeue|archive|requeue|count"},
         "video_path": {"type": "string", "description": "enqueue 时视频绝对路径"},
         "script_json": {"type": "string", "description": "enqueue 时脚本 JSON（含 title/description/narration/scenes）"},
         "topic": {"type": "string", "description": "enqueue 时选题，可空"},
@@ -63,6 +62,8 @@ class QueueOpsTool(BaseTool):
             return self._dequeue()
         if action == "archive":
             return self._archive(item_id, status, vid)
+        if action == "requeue":
+            return self._requeue(item_id)
         if action == "count":
             return self._count()
         logger.error("queue_ops unknown action=%s", action)
@@ -75,7 +76,9 @@ class QueueOpsTool(BaseTool):
         os.makedirs(os.path.dirname(lock_path), exist_ok=True)
         lock = None
         try:
-            lock = open(lock_path, "w")
+            # 审计 P2-2: "w" 截断锁文件, 并发 open("w") 短暂清空可能干扰其他读取者.
+            # 改 "a" 仅创建/追加不截断, flock 仍排他.
+            lock = open(lock_path, "a")
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             yield
         finally:
@@ -202,13 +205,57 @@ class QueueOpsTool(BaseTool):
                 logger.error("reclaim move failed id=%s: %s", item.get("id"), e)
         return reclaimed
 
+    @staticmethod
+    def _safe_id(item_id):
+        # 消毒 item_id 作文件名: 防 path traversal (../../user/123) (审计 P2-1, 0908 F4).
+        # \w Unicode-aware: 保留中文 (safe_title 经 isalnum 保留 Unicode 字母), 阻断 / . \ 路径分隔符.
+        # 旧 [^A-Za-z0-9_\-] 误杀中文 -> _archive/_requeue 找不到中文 item_id 文件 (latent bug).
+        return re.sub(r"[^\w\-]", "_", str(item_id), flags=re.UNICODE)[:120]
+
+    def _requeue(self, item_id):
+        # 发布失败时显式把 inflight item 移回 pending 重排 (审计 P0-1/P2-18).
+        # 旧设计 gate_ok false 留 inflight 靠 TTL 回收, 与 _reclaim_expired 共同致重复发布.
+        # 显式 requeue 消除回收路径依赖, 失败立即归队等下轮重试.
+        if not item_id:
+            logger.error("requeue empty item_id")
+            return json.dumps({"error": "empty item_id"})
+        safe = self._safe_id(item_id)
+        with self._lock():
+            src = os.path.join(self.INFLIGHT_DIR, f"{safe}.json")
+            if not os.path.exists(src):
+                logger.error("requeue not found in inflight id=%s", item_id)
+                return json.dumps({"error": "item not in inflight"})
+            dst = os.path.join(self.PENDING_DIR, f"{safe}.json")
+            try:
+                item = json.load(open(src, encoding="utf-8"))
+            except (ValueError, OSError) as e:
+                logger.error("requeue read failed id=%s: %s", item_id, e)
+                return json.dumps({"error": f"read failed: {e}"})
+            item.pop("leased_by", None)
+            item.pop("leased_until", None)
+            item["requeued_at"] = int(time.time())
+            tmp = dst + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(item, f, ensure_ascii=False)
+            os.replace(tmp, dst)
+            try:
+                os.remove(src)
+            except FileNotFoundError:
+                pass
+            pending = len(self._list_pending())
+        logger.warning("requeue ok id=%s back to pending=%d (publish failed, retry next round)", item_id, pending)
+        return json.dumps({"status": "requeued", "item_id": item_id, "pending": pending}, ensure_ascii=False)
+
     def _archive(self, item_id, status, vid=""):
         if not item_id:
             logger.error("archive empty item_id")
             return json.dumps({"error": "empty item_id"})
+        # 审计0908 F4: _archive 未消毒 item_id, 含 ../../ 可写任意 JSON (LLM 可触达工具).
+        # _requeue 已用 _safe_id (P2-1), _archive 漏修. 一行止血: 路径全走 safe.
+        safe = self._safe_id(item_id)
         # 优先从 in-flight 取 (dequeue 移过来的); 回退 pending (兼容旧数据).
-        src_inflight = os.path.join(self.INFLIGHT_DIR, f"{item_id}.json")
-        src_pending = os.path.join(self.PENDING_DIR, f"{item_id}.json")
+        src_inflight = os.path.join(self.INFLIGHT_DIR, f"{safe}.json")
+        src_pending = os.path.join(self.PENDING_DIR, f"{safe}.json")
         dst_dir = self.PUBLISHED_DIR if status == "published" else self.FAILED_DIR
         # 修 TOCTOU: exists 检查 + open + remove 全移入锁内. 旧实现锁外检查 exists,
         # 并发 archive 同 item 时第二个 os.remove(src) FileNotFoundError 冒泡 (cron 不并发 archive 同 item, 低危但应修).
@@ -238,7 +285,7 @@ class QueueOpsTool(BaseTool):
             item["archived_at"] = int(time.time())
             if vid:
                 item["vid"] = vid
-            dst = os.path.join(dst_dir, f"{item_id}.json")
+            dst = os.path.join(dst_dir, f"{safe}.json")
             tmp = dst + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(item, f, ensure_ascii=False)
@@ -268,13 +315,18 @@ class QueueOpsTool(BaseTool):
         if not os.path.isdir(d):
             return []
         out = []
+        # 审计 P2-3: corrupt 文件静默跳过 -> count 与实际不一致. 显式计数 + 日志文件名.
+        bad = []
         for fn in sorted(os.listdir(d)):
             if not fn.endswith(".json"):
                 continue
             try:
                 with open(os.path.join(d, fn), encoding="utf-8") as f:
                     out.append(json.load(f))
-            except (ValueError, OSError):
-                logger.warning("skip bad queue file %s", fn)
+            except (ValueError, OSError) as e:
+                logger.warning("skip bad queue file %s: %s", fn, e)
+                bad.append(fn)
+        if bad:
+            logger.error("queue_dir=%s bad_files=%d corrupt skipped: %s", d, len(bad), bad)
         out.sort(key=lambda x: x.get("created_at", 0))
         return out

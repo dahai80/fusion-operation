@@ -214,8 +214,12 @@ async def run_queue_publish(graph_path, daily_limit, approve=True):
         if d.get("status") == "empty":
             logger.info("queue empty, stop publishing")
             break
-        if d.get("status") == "publish_failed":
-            logger.error("publish failed, stop (item kept in pending for retry)")
+        # B1 (审计 B1): publish 失败时 queue_ops 已把 item 从 inflight requeue 回 pending
+        # (返回 {"status":"requeued"}), 最后 tool_result 是 requeued 非 publish_failed.
+        # 旧判 publish_failed 永不命中 -> 失败 item 立即重试同条耗 daily_limit.
+        # 改判 requeued: 失败已回 pending 等下轮 cron, 本轮停止不浪费当天配额.
+        if d.get("status") == "requeued":
+            logger.error("publish failed -> requeued, stop (item back in pending for next cron)")
             break
         if d.get("in_peak") == "false":
             logger.info("off-peak now=%s next_window=%s, stop (wait for peak)", d.get("now"), d.get("next_window"))

@@ -92,19 +92,29 @@ async def _backfill_cron_graph_id(client, graph_name, new_id):
     job_ids = CRON_BY_GRAPH.get(graph_name, [])
     if not job_ids:
         return 0
+    # B14 (审计 B14): 旧硬编码 enabled=True 覆盖运营者手动禁用的 job.
+    # sync 部署不应改变 enabled 状态. 先 cron.list 读现有 enabled, 缺失回退 True.
+    existing_enabled = {}
+    try:
+        cl = await client.call("cron.list", {})
+        for j in cl.get("jobs", []):
+            existing_enabled[j.get("id", "")] = j.get("enabled", True)
+    except Exception as e:
+        logger.warning("cron.list failed for enabled preserve, fallback True: %s", e)
     backfilled = 0
     for jid in job_ids:
         expr, input_data = CRON_FIELDS.get(jid, ("", ""))
         if not expr:
             logger.warning("cron backfill skip unknown job %s", jid)
             continue
+        preserved_enabled = existing_enabled.get(jid, True)
         res = await client.call("cron.register", {
             "id": jid,
             "name": jid,
             "expression": expr,
             "graph_id": new_id,
             "input_data": input_data,
-            "enabled": True,
+            "enabled": preserved_enabled,
             "max_retries": 1,
         })
         if res.get("status") == "ok":

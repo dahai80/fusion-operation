@@ -39,18 +39,15 @@ class DouyinReplyTool(BaseTool):
             logger.warning("douyin_reply empty drafts")
             return json.dumps({"error": "empty drafts"})
         safe_drafts = [d for d in drafts if d.get("safe") is True]
-        # 先原子抢占未回复的 cid: load+claim+save 在同一把 LOCK_EX 内完成 (毫秒级),
-        # 消除旧实现 load(L41)->reply 数分钟无锁 -> save(L97) 全量覆盖的 RMW 窗口.
-        # 旧 _load_replied 锁 REPLIED_FILE(SH), _save_replied 锁 REPLIED_FILE.lock(EX) 两锁不同文件互斥不成立 -> 并发 cron 丢已回复 -> 重复回复被抖音判刷 (审计 R1).
-        claimed, replied_before = self._claim_replied(
-            [d.get("id", "") for d in safe_drafts], max_reply
-        )
-        todo = [d for d in safe_drafts if d.get("id", "") in claimed]
-        logger.info(
-            "douyin_reply drafts=%d safe=%d todo=%d replied_before=%d claimed=%d",
-            len(drafts), len(safe_drafts), len(todo), replied_before, len(claimed),
-        )
+        candidate_ids = [d.get("id", "") for d in safe_drafts]
         if dry_run:
+            # dry_run: 只读快照算 todo, 不持久化 claim (不消耗 cid).
+            replied_set = self._load_replied()
+            todo = [d for d in safe_drafts if d.get("id", "") not in replied_set][:max_reply]
+            logger.info(
+                "douyin_reply dry_run drafts=%d safe=%d todo=%d",
+                len(drafts), len(safe_drafts), len(todo),
+            )
             return json.dumps(
                 {"dry_run": True, "todo": [d.get("id") for d in todo], "skipped": len(safe_drafts) - len(todo)},
                 ensure_ascii=False,
@@ -60,12 +57,16 @@ class DouyinReplyTool(BaseTool):
         except ImportError:
             logger.error("playwright not installed")
             return json.dumps({"error": "playwright not installed"})
+        # B11 (审计 B11): 旧实现 _claim_replied 先于浏览器 launch + session check.
+        # session 过期时 cid 已持久化落盘 -> 永久消费 -> 永不回复 (下次 cron 跳过).
+        # 改: 先 launch + 探测 session 有效, 再 claim. session 过期不消耗任何 cid.
+        # claim 仍原子 (load+claim+save 同一把 LOCK_EX, 毫秒级, 消除 RMW 窗口, 审计 R1).
+        # F1: profile_lock 串行化整个浏览器会话 (跨 launch->work->close), launch_with_retry 复用共享模块.
+        ctx = None
+        todo = []
         replied = []
         skipped = 0
         liked = 0
-        # claimed 的 cid 已在 _claim_replied 内持久化落盘 (幂等), 即便本次 reply 中途失败,
-        # 下次 cron 也不会重复回复这些 cid. 回复失败仅记 skipped, 不回滚 claim (宁可漏回复不重复回复).
-        ctx = None
         try:
             with profile_lock():
                 async with async_playwright() as p:
@@ -75,8 +76,24 @@ class DouyinReplyTool(BaseTool):
                     await page.goto(DOUYIN_COMMENT_URL, timeout=30000)
                     await asyncio.sleep(8)
                     if "扫码登录" in await page.inner_text("body"):
-                        logger.warning("session expired at reply")
+                        logger.warning("session expired at reply, claim aborted (no cid consumed)")
+                        await ctx.close()
                         return json.dumps({"error": "session expired"})
+                    # session 有效, 现在原子 claim.
+                    claimed, replied_before = self._claim_replied(candidate_ids, max_reply)
+                    todo = [d for d in safe_drafts if d.get("id", "") in claimed]
+                    logger.info(
+                        "douyin_reply drafts=%d safe=%d todo=%d replied_before=%d claimed=%d",
+                        len(drafts), len(safe_drafts), len(todo), replied_before, len(claimed),
+                    )
+                    if not todo:
+                        await ctx.close()
+                        logger.info("douyin_reply no new todo after claim, done")
+                        return json.dumps(
+                            {"replied": [], "liked": 0, "skipped": 0, "todo": 0},
+                            ensure_ascii=False,
+                        )
+                    # claimed 的 cid 已持久化 (幂等), reply 中途失败不回滚 (宁可漏回复不重复回复).
                     await self._click_text(page, SEL_SELECT_WORK)
                     await asyncio.sleep(6)
                     if aweme_title:

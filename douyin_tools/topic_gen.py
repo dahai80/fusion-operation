@@ -173,8 +173,10 @@ class TopicGenTool(BaseTool):
     def _load_published_titles():
         if not os.path.isdir(PUBLISHED_DIR):
             return []
+        # B2 (审计 B2): 旧 sorted() 升序 = 最旧在前, 下游 excl_list[:30] 取最老 30 条
+        # -> 最近 30 条已发布主题不在排重窗口内 -> 重复选题. 改降序取最近.
         out = []
-        for fn in sorted(os.listdir(PUBLISHED_DIR)):
+        for fn in sorted(os.listdir(PUBLISHED_DIR), reverse=True):
             if not fn.endswith(".json"):
                 continue
             try:

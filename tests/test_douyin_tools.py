@@ -1472,6 +1472,7 @@ class _FakeRpcClient:
                 "id": jid,
                 "graph_id": params.get("graph_id", ""),
                 "expression": params.get("expression", ""),
+                "enabled": params.get("enabled", True),
             }
             return {"status": "ok", "job": {"id": jid}}
         if method == "cron.list":
@@ -2390,3 +2391,185 @@ async def test_perf_analyze_excludes_estimated_from_attribution(tmp_path, monkey
     assert "假数据A" not in ev
     assert "假数据B" not in ev
 
+
+
+def test_b2_load_published_titles_recent_first(tmp_path, monkeypatch):
+    # B2 (审计 B2): _load_published_titles 旧 sorted() 升序 = 最旧在前,
+    # 下游 excl_list[:30] 取最老 30 -> 最近已发布主题不在排重窗口 -> 重复选题.
+    # 修: 降序取最近. 验证返回顺序 = 最近在前.
+    from douyin_tools import topic_gen as tmod
+    from douyin_tools.topic_gen import TopicGenTool
+    pub = tmp_path / "pub"
+    pub.mkdir()
+    # 写 3 个文件, mtime 递增 (old < mid < new), 内容含可识别 topic.
+    import time as _t
+    for i, topic in enumerate(["old_topic", "mid_topic", "new_topic"]):
+        p = pub / f"v{i}.json"
+        p.write_text(json.dumps({"topic": topic}))
+        mt = _t.time() + i * 100
+        os.utime(p, (mt, mt))
+    monkeypatch.setattr(tmod, "PUBLISHED_DIR", str(pub), raising=False)
+    titles = TopicGenTool._load_published_titles()
+    assert titles[0] == "new_topic", f"最近应在前, got {titles[0]}"
+    assert titles[-1] == "old_topic", f"最旧应在后, got {titles[-1]}"
+
+
+async def test_b11_session_expired_no_claim(tmp_path, monkeypatch):
+    # B11 (审计 B11): 旧 _claim_replied 先于 session check -> session 过期 cid 永久消费.
+    # 修: 先 session check 再 claim. 验证 session 过期时 REPLIED_FILE 不被写入任何 cid.
+    import douyin_tools.douyin_reply as mod
+    import sys
+    rf = str(tmp_path / "replied.json")
+    monkeypatch.setattr(mod, "REPLIED_FILE", rf)
+    monkeypatch.setattr(mod, "OPS_DATA_DIR", str(tmp_path), raising=False)
+
+    class ExpiredPage:
+        async def inner_text(self, *a, **k):
+            return "扫码登录"
+        async def goto(self, *a, **k):
+            pass
+        async def evaluate(self, *a, **k):
+            return "ok"
+
+    class ExpiredCtx:
+        pages = [ExpiredPage()]
+        async def close(self):
+            pass
+        async def new_page(self):
+            return ExpiredPage()
+
+    class ExpiredBrowser:
+        async def launch_persistent_context(self, *a, **k):
+            return ExpiredCtx()
+
+    class ExpiredPlaywright:
+        def __init__(self):
+            self.chromium = ExpiredBrowser()
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+
+    fake_mod = type(sys)("playwright.async_api")
+    fake_mod.async_playwright = lambda: ExpiredPlaywright()
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_mod)
+
+    t = DouyinReplyTool()
+    drafts = '[{"id":"c1","text":"hi","safe":true},{"id":"c2","text":"yo","safe":true}]'
+    res = await t.execute(drafts_json=drafts, max_reply=5, headless=True)
+    d = json.loads(res)
+    assert d.get("error") == "session expired"
+    # 核心: session 过期时不应持久化任何 cid (claim 未发生).
+    assert not os.path.exists(rf) or json.load(open(rf)).get("replied_ids") == [], \
+        "session 过期不应 claim 任何 cid"
+
+
+async def test_b11_session_ok_then_claims(tmp_path, monkeypatch):
+    # B11 正向: session 有效时 claim 正常发生 (reorder 不破坏正常路径).
+    import douyin_tools.douyin_reply as mod
+    import sys
+    rf = str(tmp_path / "replied.json")
+    monkeypatch.setattr(mod, "REPLIED_FILE", rf)
+    monkeypatch.setattr(mod, "OPS_DATA_DIR", str(tmp_path), raising=False)
+
+    class OkPage:
+        async def inner_text(self, *a, **k):
+            return "评论管理"
+        async def goto(self, *a, **k):
+            pass
+        async def evaluate(self, *a, **k):
+            return "ok"
+
+    class OkCtx:
+        pages = [OkPage()]
+        async def close(self):
+            pass
+        async def new_page(self):
+            return OkPage()
+
+    class OkBrowser:
+        async def launch_persistent_context(self, *a, **k):
+            return OkCtx()
+
+    class OkPlaywright:
+        def __init__(self):
+            self.chromium = OkBrowser()
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+
+    fake_mod = type(sys)("playwright.async_api")
+    fake_mod.async_playwright = lambda: OkPlaywright()
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_mod)
+
+    t = DouyinReplyTool()
+    # _click_text/_click_work/_like_comment/_reply_comment 都走 evaluate -> mock 返回 ok.
+    drafts = '[{"id":"c1","text":"hi","safe":true}]'
+    res = await t.execute(drafts_json=drafts, max_reply=5, headless=True)
+    d = json.loads(res)
+    # session 有效 -> claim 发生 -> cid 持久化.
+    persisted = json.load(open(rf)).get("replied_ids", [])
+    assert "c1" in persisted, "session 有效时应 claim c1"
+
+
+def test_b14_sync_preserves_disabled_cron(tmp_path, monkeypatch):
+    # B14 (审计 B14): sync_graphs cron.register 旧硬编码 enabled=True
+    # 覆盖运营者手动禁用. 修: 读现有 enabled 状态 preserve.
+    import sync_graphs as sg
+    import glob as _glob
+    import asyncio as _asyncio
+
+    gdir = tmp_path / "graphs"
+    gdir.mkdir()
+    (gdir / "douyin_auto_publish.json").write_text(json.dumps({
+        "name": "douyin_auto_publish",
+        "agent_id": "c65efddbe8c5",
+        "nodes": {"start": {"type": "start"}},
+        "edges": [],
+    }))
+    monkeypatch.setattr(sg, "GRAPHS_DIR", str(gdir))
+
+    # 旧 store + cron: 0905 job 被运营者手动禁用 (enabled=False).
+    fake = _FakeRpcClient(
+        existing=[("old-auto", "douyin_auto_publish")],
+        cron_jobs=[
+            ("douyin_publish_plan_0905", "old-auto"),
+            ("douyin_publish_plan_1105", "old-auto"),
+        ],
+    )
+    # 模拟 0905 被禁用.
+    fake.cron_jobs["douyin_publish_plan_0905"]["enabled"] = False
+    fake.cron_jobs["douyin_publish_plan_1105"]["enabled"] = True
+    monkeypatch.setattr(sg, "AgentClient", lambda socket_path=None: fake)
+    files = sorted(_glob.glob(os.path.join(str(gdir), "*.json")))
+    _asyncio.run(sg.sync_graphs(files))
+
+    # 回填后: 0905 仍禁用, 1105 仍启用 (不被覆盖成 True).
+    # _FakeRpcClient.cron.register 存 id/graph_id/expression, 需扩展存 enabled.
+    reg_0905 = fake.cron_jobs["douyin_publish_plan_0905"]
+    reg_1105 = fake.cron_jobs["douyin_publish_plan_1105"]
+    assert reg_0905.get("enabled") is False, "运营者禁用的 job 不应被 sync 覆盖为 enabled"
+    assert reg_1105.get("enabled") is True
+
+
+async def test_b1_run_queue_publish_requeued_stops():
+    # B1 (审计 B1): run_queue_publish 旧判 status=="publish_failed" 永不命中
+    # (失败时 queue_ops 返回 {"status":"requeued"}). 修: 改判 requeued.
+    # 验证 requeued 时停止循环 (不浪费 daily_limit 重试同条).
+    import run_graph as rg
+
+    call_count = {"n": 0}
+
+    async def fake_run_once(graph_path, approve=True, extra_vars=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return 1, json.dumps({"status": "requeued"})
+        return 0, json.dumps({"status": "archived"})
+
+    monkeypatch_global = __import__("unittest.mock").mock.patch
+    with monkeypatch_global.object(rg, "run_once", fake_run_once):
+        rc = await rg.run_queue_publish("graph.json", daily_limit=5, approve=True)
+    # requeued 应立即停止, 只调用 1 次 (不重试同条耗配额).
+    assert call_count["n"] == 1, f"requeued 应停止, 实际调用 {call_count['n']} 次"
+    assert rc == 0

@@ -1,0 +1,28 @@
+{
+  "name": "douyin_step_enqueue",
+  "description": "M3-2 restock step: enqueue video (PUBLISHER role). Single-tool mini-graph, orchestrator-driven chain step 4. Final step, puts video in publish queue.",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {"type": "start", "label": "开始"},
+    "enqueue": {
+      "type": "tool",
+      "label": "入库待发(补货步骤)",
+      "tool_name": "queue_ops",
+      "tool_params": {
+        "action": "enqueue",
+        "video_path": "{{video_path}}",
+        "script_json": "{{script_json}}",
+        "topic": "{{topic}}",
+        "output_mapping": {"status": "enqueued_status"}
+      }
+    },
+    "end": {"type": "end", "label": "结束"}
+  },
+  "edges": [
+    {"source_id": "start", "target_id": "enqueue"},
+    {"source_id": "enqueue", "target_id": "end"}
+  ]
+}

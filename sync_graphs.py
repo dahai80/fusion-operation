@@ -29,6 +29,12 @@ PRODUCTION_GRAPHS = [
     "douyin_comment_reply_winner.json",
     "douyin_evolve.json",
     "douyin_repair_publish.json",
+    # M3-2: 补货链 5 步 mini-graph (orchestrator-driven, 非 cron 触发)
+    "douyin_step_script.json",
+    "douyin_step_image.json",
+    "douyin_step_tts.json",
+    "douyin_step_compose.json",
+    "douyin_step_enqueue.json",
 ]
 
 # graph name -> 关联 cron job id 列表. sync 重建 graph 后 graph_id 变化,

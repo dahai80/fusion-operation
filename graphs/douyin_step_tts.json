@@ -1,0 +1,26 @@
+{
+  "name": "douyin_step_tts",
+  "description": "M3-2 restock step: generate audio (VOICER role). Single-tool mini-graph, orchestrator-driven chain step 2.",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {"type": "start", "label": "开始"},
+    "tts": {
+      "type": "tool",
+      "label": "配音(补货步骤)",
+      "tool_name": "comfyui_tts",
+      "tool_params": {
+        "text": "{{script_json}}",
+        "out_name": "",
+        "output_mapping": {"audio_path": "audio_path"}
+      }
+    },
+    "end": {"type": "end", "label": "结束"}
+  },
+  "edges": [
+    {"source_id": "start", "target_id": "tts"},
+    {"source_id": "tts", "target_id": "end"}
+  ]
+}

@@ -25,6 +25,7 @@ class ComfyUIImageTool(BaseTool):
 
     name = "comfyui_image"
     description = "ComfyUI 文生图：FusionImageGen 生图落盘，返回图片路径数组 JSON（mlx_image 的 ComfyUI 优先路径）"
+    roles = frozenset({"imager"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "prompts": {"type": "string", "description": "提示词列表(JSON 数组或逗号分隔)"},
         "n": {"type": "integer", "description": "每个提示词生成张数，默认 1"},

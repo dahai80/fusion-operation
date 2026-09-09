@@ -38,6 +38,7 @@ except (TypeError, ValueError):
 class OpsHealthTool(BaseTool):
     name = "ops_health"
     description = "运营健康监控: 检查 cron 失败率 + 库存计数 + winning_patterns/blacklist/replied/stats mtime + 发布队列 vid 回填率, 输出告警清单供每日巡检"
+    roles = frozenset({"analyst", "lead"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "check_cron": {"type": "boolean", "description": "是否查 cron 执行记录(需 daemon 在线), 默认 True"},
         "days": {"type": "integer", "description": "检查最近 N 天 cron 执行, 默认 1"},

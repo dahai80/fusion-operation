@@ -17,6 +17,7 @@ REPLIED_FILE = os.path.join(OPS_DATA_DIR, "replied.json")
 class DouyinReplyTool(BaseTool):
     name = "douyin_reply"
     description = "批量回复抖音评论：逐条点赞+回复，跳过不安全草稿，已回复的幂等跳过（Playwright async）"
+    roles = frozenset({"publisher", "analyst"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "drafts_json": {"type": "string", "description": "回复草稿 JSON [{id,text,safe}]"},
         "aweme_title": {"type": "string", "description": "作品标题关键词，空=最近作品"},

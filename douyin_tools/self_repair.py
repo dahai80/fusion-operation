@@ -40,6 +40,7 @@ RETITLE_PROMPT = """你是抖音爆款标题改写师。根据爆款模式给差
 class SelfRepairTool(BaseTool):
     name = "self_repair"
     description = "差片自我修复：scan 扫 72h 差片候选 / retitle 换标题+描述重入 pending / blacklist 选题加入黑名单 / reclip 暂未实现(标记 skip)"
+    roles = frozenset({"analyst"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "action": {"type": "string", "description": "scan|retitle|reclip|blacklist"},
         "vid": {"type": "string", "description": "retitle/reclip/blacklist 指定视频 vid"},

@@ -34,6 +34,7 @@ ANALYZE_PROMPT = """你是抖音短视频爆款归因分析师。基于已发布
 class PerfAnalyzeTool(BaseTool):
     name = "perf_analyze"
     description = "归因分析：读 stats_history 排行 + published 脚本，用模型提取爆款模式，落盘 winning_patterns.json 供 topic_gen/mlx_script 回灌"
+    roles = frozenset({"analyst"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "model": {"type": "string", "description": "模型名，默认 DEFAULT_CHAT_MODEL"},
         "min_samples": {"type": "integer", "description": "归因最少样本数，默认 5，不足则不归因"},

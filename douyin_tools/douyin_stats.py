@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class DouyinStatsTool(BaseTool):
     name = "douyin_stats"
     description = "从抖音创作者后台抓取运营统计：所有作品播放/赞/评/分享 + 账号粉丝/获赞（Playwright async）"
+    roles = frozenset({"analyst"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "aweme_id": {"type": "string", "description": "指定作品id，空=全部作品"},
         "headless": {"type": "boolean", "description": "是否无头，默认 True"},

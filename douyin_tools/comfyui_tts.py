@@ -25,6 +25,7 @@ class ComfyUITtsTool(BaseTool):
 
     name = "comfyui_tts"
     description = "ComfyUI 文本转语音：FusionVoiceSynthesize 合成 + FusionSaveAudio 落盘，返回音频路径 JSON（mlx_tts 的 ComfyUI 优先路径）"
+    roles = frozenset({"voicer"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "text": {"type": "string", "description": "要合成的文本(或脚本 JSON, 自动抽取旁白)"},
         "voice": {"type": "string", "description": "音色，默认 af_heart"},

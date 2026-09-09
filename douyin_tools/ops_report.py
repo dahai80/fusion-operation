@@ -23,6 +23,7 @@ STAGE_LABEL = {
 class OpsReportTool(BaseTool):
     name = "ops_report"
     description = "运营统计报表：先全貌（账号+汇总+分布+variant对比），再逐视频细节排行（按指标排序优秀在前），每条标注为什么好/差（归因 winning/losing patterns）。落盘 out/ops/report_YYYY-MM-DD.md"
+    roles = frozenset({"analyst"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "stats_json": {"type": "string", "description": "douyin_stats 返回的 JSON"},
         "comments_json": {"type": "string", "description": "评论列表 JSON，可空"},

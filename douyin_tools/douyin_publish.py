@@ -20,6 +20,7 @@ SEL_FRAME_ITEM = ".preview-frame-rt7Mc1"
 class DouyinPublishTool(BaseTool):
     name = "douyin_publish"
     description = "发布一条抖音视频；dry_run=True 仅走到发布前不真发。需 playwright async api"
+    roles = frozenset({"publisher"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "video_path": {"type": "string", "description": "视频绝对路径"},
         "description": {"type": "string", "description": "作品描述含#话题"},

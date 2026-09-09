@@ -31,6 +31,7 @@ SYSTEM_PROMPT = """你是抖音科普吸粉选题策划。按以下规则输出�
 class TopicGenTool(BaseTool):
     name = "topic_gen"
     description = "用 fusion-mlx 批量生成抖音选题（topic/series/hook_type），读取 winning_patterns.json 回灌爆款模式 + 自动排除已发布/黑名单选题"
+    roles = frozenset({"researcher"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "series": {"type": "string", "description": "所属系列，如 宇宙奥秘"},
         "count": {"type": "integer", "description": "生成选题数量，默认 7"},

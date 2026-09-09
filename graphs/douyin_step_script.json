@@ -1,0 +1,27 @@
+{
+  "name": "douyin_step_script",
+  "description": "M3-2 restock step: generate script (WRITER role). Single-tool mini-graph, orchestrator-driven chain step 0.",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {"type": "start", "label": "开始"},
+    "script": {
+      "type": "tool",
+      "label": "生成脚本(补货步骤)",
+      "tool_name": "mlx_script",
+      "tool_params": {
+        "topic": "{{topic}}",
+        "series": "{{series}}",
+        "hook_variant": "{{hook_variant}}",
+        "output_mapping": {"result": "script_json"}
+      }
+    },
+    "end": {"type": "end", "label": "结束"}
+  },
+  "edges": [
+    {"source_id": "start", "target_id": "script"},
+    {"source_id": "script", "target_id": "end"}
+  ]
+}

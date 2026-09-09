@@ -1,0 +1,28 @@
+{
+  "name": "douyin_step_compose",
+  "description": "M3-2 restock step: compose video (PUBLISHER role). Single-tool mini-graph, orchestrator-driven chain step 3. Depends on image+tts.",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {"type": "start", "label": "开始"},
+    "compose": {
+      "type": "tool",
+      "label": "合成视频(补货步骤)",
+      "tool_name": "ffmpeg_compose",
+      "tool_params": {
+        "image_paths": "{{image_paths}}",
+        "audio_path": "{{audio_path}}",
+        "scenes": "{{script_json}}",
+        "out_name": "",
+        "output_mapping": {"video_path": "video_path"}
+      }
+    },
+    "end": {"type": "end", "label": "结束"}
+  },
+  "edges": [
+    {"source_id": "start", "target_id": "compose"},
+    {"source_id": "compose", "target_id": "end"}
+  ]
+}

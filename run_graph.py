@@ -16,13 +16,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_graph")
 
+import time as _time
+
 _graph_id_cache = {}
+# graph_id 缓存 TTL (审计 P1-4): 永久缓存 + sync_graphs 重建/daemon 重启改 id -> stale ->
+# "Graph not found" 被当 RPC 不可用 -> 静默本地回退 (无 tool config 注入, 与 cron 分叉).
+# 60s TTL + execute 失败时清缓存重取一次.
+_GRAPH_ID_TTL = 60.0
 
 # RPC 超时: daemon 接收请求但无响应 (事件循环卡死/graph 长任务) 时上游 AgentClient.call
 # 的 reader.readline() 永久 await. 上游 PR #208 (issue #207) 已加 native timeout 参数,
 # 构造时传 default_timeout 即获超时保护, 超时返回 error dict 让 cron job 落 failed 而非
 # 永久挂起叠加下一次 fire. 旧 CLI 层 wait_for 包装已移除 (上游 SDK 层接管).
-RPC_TIMEOUT = float(os.environ.get("FUSION_RPC_TIMEOUT", "600"))
+# 审计 0908 F2: 旧默认 600s < 补货链真实执行时长 (topic_gen≤600 + mlx_script≤600 +
+# comfyui_image≤900 + comfyui_tts≤300 + compose + publish 5-15min, 尾部 60-90min).
+# 600s 必超时 -> client 记 failed 但 daemon 仍后台执行真发布 (孤儿执行) -> lease 到期
+# _reclaim_expired 移回 pending -> 下轮重发同一条 (重复发布). 上调到 5400s (90min) 覆盖
+# 最坏情形: client 等 daemon 跑完返回真实结果, 无孤儿无假失败无重发. cron 最小间隔 2h,
+# 90min < 120min 不致下轮 fire 重叠. 真死锁 (事件循环卡死) 由 ops_health inflight>2×TTL
+# 告警捕获 (修 ④). 完整异步化 (execution_id + 事件订阅) 属 M1 团队状态层, 此处止血上调.
+RPC_TIMEOUT = float(os.environ.get("FUSION_RPC_TIMEOUT", "5400"))
+
+
+class _ExecAttempted(Exception):
+    # graph.execute 已在 daemon 端执行 (可能部分) -> 不可回退本地重跑 (审计 P2-4).
+    pass
 
 
 async def _rpc_run_once(graph_path, approve, extra_vars):
@@ -42,7 +60,11 @@ async def _rpc_run_once(graph_path, approve, extra_vars):
     with open(graph_path, "rb") as _f:
         content_hash = hashlib.md5(_f.read()).hexdigest()
     cache_key = f"{graph_path}:{content_hash}"
-    graph_id = _graph_id_cache.get(cache_key)
+    cached = _graph_id_cache.get(cache_key)
+    graph_id = ""
+    if cached and (_time.monotonic() - cached[1] < _GRAPH_ID_TTL):
+        graph_id = cached[0]
+        logger.info("rpc reuse graph_id=%s", graph_id)
     if not graph_id:
         with open(graph_path, encoding="utf-8") as f:
             graph_data = json.load(f)
@@ -54,10 +76,8 @@ async def _rpc_run_once(graph_path, approve, extra_vars):
         if not graph_id:
             logger.warning("rpc graph.create no graph_id")
             return None
-        _graph_id_cache[cache_key] = graph_id
+        _graph_id_cache[cache_key] = (graph_id, _time.monotonic())
         logger.info("rpc graph.create ok graph_id=%s name=%s", graph_id, res.get("name", ""))
-    else:
-        logger.info("rpc reuse graph_id=%s", graph_id)
     logger.info("rpc graph.execute graph_id=%s approve=%s vars=%s", graph_id, approve, list(variables.keys()))
     exec_params = {"graph_id": graph_id, "variables": variables}
     if agent_id:
@@ -65,7 +85,10 @@ async def _rpc_run_once(graph_path, approve, extra_vars):
     res = await client.call("graph.execute", exec_params)
     if res.get("error"):
         logger.warning("rpc graph.execute failed: %s", res["error"])
-        return None
+        # execute 失败可能 stale graph_id -> 清缓存让下次重取 (审计 P1-4).
+        _graph_id_cache.pop(cache_key, None)
+        # daemon 已收到 execute 请求, 可能部分执行 -> 不回退本地 (审计 P2-4 双重执行).
+        raise _ExecAttempted(res["error"])
     events = res.get("events", [])
     last_result = ""
     completed = res.get("status") == "completed"
@@ -121,10 +144,15 @@ async def _local_run_once(graph_path, approve=True, extra_vars=None):
 
 
 async def run_once(graph_path, approve=True, extra_vars=None):
-    rpc_res = await _rpc_run_once(graph_path, approve, extra_vars)
+    try:
+        rpc_res = await _rpc_run_once(graph_path, approve, extra_vars)
+    except _ExecAttempted as e:
+        # daemon 已执行 graph.execute (可能部分) -> 不回退本地避免双重执行 (审计 P2-4).
+        logger.error("rpc execute attempted but failed: %s -> 不回退本地, 返回失败", e)
+        return 1, ""
     if rpc_res is not None:
         return rpc_res
-    logger.warning("rpc unavailable, fallback to local import path")
+    logger.warning("rpc unavailable (create 阶段未执行), fallback to local import path")
     return await _local_run_once(graph_path, approve, extra_vars)
 
 
@@ -141,7 +169,9 @@ async def run_batch_produce(graph_path, count, series="宇宙奥秘"):
     topics = topics_data["topics"]
     logger.info("topic_gen got %d topics", len(topics))
     ok = 0
-    variants = ["A", "B", "C"]
+    # variant C 4/4 全 0 播放 (2026-09-07 数据), 暂淘汰改 A/B 加权.
+    # A max=1149 (破千) B max=995, 两变体均验证有效. C 待样本重新评估再开.
+    variants = ["A", "B", "A", "B"]
     for i, t in enumerate(topics[:count]):
         topic = t.get("topic", "")
         hook_type = t.get("hook_type", "悬念")
@@ -175,13 +205,12 @@ async def run_queue_publish(graph_path, daily_limit, approve=True):
     for i in range(daily_limit):
         logger.info("=== publish round %d/%d ===", i + 1, daily_limit)
         rc, res = await run_once(graph_path, approve=approve)
-        if rc != 0:
-            logger.error("publish round %d failed", i + 1)
-            break
         try:
-            d = json.loads(res)
+            d = json.loads(res) if res else {}
         except (ValueError, TypeError):
             d = {}
+        # 正常停止条件: 空库存/非高峰 (审计 P1-5): 旧实现 rc!=0 一律 break, 一次 flaky
+        # 工具错误杀掉当天剩余全部发布. 空库存/非高峰本身 rc 可能非 0, 但属正常停止.
         if d.get("status") == "empty":
             logger.info("queue empty, stop publishing")
             break
@@ -191,6 +220,11 @@ async def run_queue_publish(graph_path, daily_limit, approve=True):
         if d.get("in_peak") == "false":
             logger.info("off-peak now=%s next_window=%s, stop (wait for peak)", d.get("now"), d.get("next_window"))
             break
+        if rc != 0:
+            # graph 异常 (非空库存/非高峰) -> continue 重试下一轮, 不杀全天 (审计 P1-5).
+            logger.error("publish round %d graph error rc=%d, continue to next round", i + 1, rc)
+            await asyncio.sleep(3)
+            continue
         if d.get("status") == "archived":
             published += 1
         await asyncio.sleep(3)

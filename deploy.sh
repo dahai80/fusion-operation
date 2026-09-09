@@ -31,6 +31,26 @@ log "3/5 sync_agent_config (tool config 注入智能体包)"
 log "4/5 sync_graphs (graph 进 store + cron job graph_id 回填)"
 "$PYTHON" sync_graphs.py || fail "sync_graphs 失败"
 
+# 审计 0908 F2 ③: daemon 重启会杀掉 in-flight graph 执行. 若部署发生在孤儿执行期间 (publish
+# 上传中), 重启中断发布 -> item 卡 inflight -> lease 到期 reclaim -> 重发 (重复发布).
+# 部署门禁: inflight 非空时禁止重启, 延迟部署等 inflight 清空 (archive/requeue 完成).
+log "4.5/5 部署门禁: 检查 inflight (非空 = 有发布进行中, 延迟部署)"
+INFLIGHT_CHECK="$("$PYTHON" -c "
+import os, sys
+sys.path.insert(0, '.')
+from douyin_tools.config import QUEUE_DIR
+inflight = os.path.join(QUEUE_DIR, 'inflight')
+n = sum(1 for f in os.listdir(inflight) if f.endswith('.json')) if os.path.isdir(inflight) else 0
+print(n)
+" 2>/dev/null || echo "ERR")"
+if [ "$INFLIGHT_CHECK" = "ERR" ]; then
+    fail "inflight 检查脚本异常, 中止部署 (不盲重启)"
+fi
+if [ "$INFLIGHT_CHECK" != "0" ]; then
+    fail "inflight 非空 (count=$INFLIGHT_CHECK): 有发布进行中, daemon 重启会中断致重复发布. 等 inflight 清空后重新部署"
+fi
+log "inflight=0, 安全重启"
+
 log "5/5 daemon 重启 (env -u FUSION_MLX_API_KEY 走 settings.json 回退)"
 if launchctl list 2>/dev/null | grep -q "com.fusion-agent-studio.server"; then
     log "launchd 管控中, uninstall+install 重载 plugin"

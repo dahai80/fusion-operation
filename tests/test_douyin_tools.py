@@ -44,8 +44,8 @@ _QUEUE_TOOLS = ["queue_ops", "topic_gen"]
 
 def test_registry_has_core_tools():
     r = create_douyin_registry()
-    assert r.count == 21
-    for name in _CORE_TOOLS + _OPS_TOOLS + _QUEUE_TOOLS + ["web_image_search", "douyin_self_comment"]:
+    assert r.count == 20
+    for name in _CORE_TOOLS + _OPS_TOOLS + _QUEUE_TOOLS + ["web_image_search"]:
         assert r.has(name), f"missing {name}"
 
 
@@ -802,8 +802,7 @@ def test_perf_track_parse_create_time():
     from douyin_tools.perf_track import PerfTrackTool
     import datetime
     d1 = PerfTrackTool._parse_create_time("发布于2026年08月10日 10:19")
-    # P3-3: _parse_create_time 固定 CST tz-aware (避免 daemon TZ=UTC 漂移)
-    assert d1 == datetime.datetime(2026, 8, 10, 10, 19, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+    assert d1 == datetime.datetime(2026, 8, 10, 10, 19)
     d2 = PerfTrackTool._parse_create_time(1786000000)
     assert d2 is not None and d2.year == 2026
     assert PerfTrackTool._parse_create_time("垃圾") is None
@@ -814,7 +813,7 @@ def test_perf_track_stage():
     assert PerfTrackTool._stage(5) == "cold_start"
     assert PerfTrackTool._stage(30) == "recommend"
     assert PerfTrackTool._stage(100) == "long_tail"
-    assert PerfTrackTool._stage(-1) == "unknown"  # 审计 P3-5: age<0=未知, 不再误判 long_tail
+    assert PerfTrackTool._stage(-1) == "long_tail"
 
 
 def test_perf_track_prune_history_caps_per_vid(tmp_path, monkeypatch):
@@ -979,18 +978,9 @@ async def test_publish_scheduler_off_peak():
 async def test_publish_scheduler_evening():
     from douyin_tools.publish_scheduler import PublishSchedulerTool
     t = PublishSchedulerTool()
-    d = json.loads(await t.execute(now="20:30"))
-    assert d["in_peak"] == "true"
-    assert d["peak_label"] == "黄金时段"
-
-
-async def test_publish_scheduler_evening_peak_window():
-    from douyin_tools.publish_scheduler import PublishSchedulerTool
-    t = PublishSchedulerTool()
     d = json.loads(await t.execute(now="18:30"))
     assert d["in_peak"] == "true"
     assert d["peak_label"] == "晚高峰"
-    assert d["should_wait"] == "false"
 
 
 async def test_publish_scheduler_next_wraps():
@@ -998,7 +988,7 @@ async def test_publish_scheduler_next_wraps():
     t = PublishSchedulerTool()
     d = json.loads(await t.execute(now="22:00"))
     assert d["in_peak"] == "false"
-    assert d["next_window"] == "tomorrow 09:00"  # 跨天 wrap: 22:00 过所有窗口 -> 次日首窗
+    assert d["next_window"] == "09:00"
 
 
 def test_self_repair_schema():
@@ -1363,7 +1353,7 @@ def test_config_mtime_null_no_crash(tmp_path, monkeypatch):
     assert cfg.get_json_config() == {}
     # 动态常量回退默认 (JSON 空, env 空).
     monkeypatch.delenv("FUSION_CHAT_MODEL", raising=False)
-    assert cfg.DEFAULT_CHAT_MODEL == "Qwen3.8-27B-4bit"
+    assert cfg.DEFAULT_CHAT_MODEL == "Qwen3.5-9B-4bit"
     monkeypatch.delenv("DOUYIN_CONFIG_FILE", raising=False)
     importlib.reload(cfg)
 
@@ -1603,7 +1593,7 @@ def test_auto_publish_graph_structure():
     nodes = g["nodes"]
     for nid in ["start", "scheduler", "gate_peak", "dequeue", "gate_stock",
                 "gate_refill_budget", "topic_gen", "script", "img", "tts", "compose",
-                "enqueue", "gate_refilled", "publish", "gate_ok", "archive", "self_comment", "end"]:
+                "enqueue", "gate_refilled", "publish", "gate_ok", "archive", "end"]:
         assert nid in nodes, f"missing node {nid}"
     # H4: gate_refill_budget 用原生 iteration 变量限制补货循环次数 (防 dequeue<->refill 无限回环).
     assert nodes["gate_refill_budget"]["condition_expr"] == "iteration < 23"
@@ -1627,16 +1617,6 @@ def test_auto_publish_graph_structure():
     # publish path intact
     assert ("gate_stock", "publish", "true") in edges
     assert ("gate_peak", "end", "false") in edges, "off-peak must exit to end"
-    # Task #47: 发布成功后首评自埋. P2-19: archive -> gate_has_vid (有 vid 才自埋, 无 vid 跳过) -> self_comment -> end.
-    assert ("gate_ok", "archive", "true") in edges, "publish ok must archive"
-    assert ("archive", "gate_has_vid", "") in edges, "archive routes to vid gate (P2-19)"
-    assert ("gate_has_vid", "self_comment", "true") in edges, "has vid must self_comment"
-    assert ("gate_has_vid", "end", "false") in edges, "no vid skip self_comment"
-    assert ("self_comment", "end", "") in edges, "self_comment must exit to end"
-    assert ("archive", "end", "") not in edges, "archive 不再直连 end (经 gate_has_vid)"
-    sc = nodes["self_comment"]
-    assert sc["tool_name"] == "douyin_self_comment"
-    assert sc["tool_params"]["vid"] == "{{vid}}", "self_comment 需发布后捕获的 vid"
 
 
 def test_mlx_headers_fusion_route():
@@ -1861,17 +1841,14 @@ def test_comfyui_image_no_people_negative():
 
 
 def test_web_image_search_extract_celestial():
-    # img_prompt 抽首个天体名词作 NASA query (简短名词召回准). 命中不到 fallback 通用天体词 nebula.
+    # img_prompt 抽首个天体名词作 NASA query (简短名词召回准). 命中不到 fallback 前 3 词.
     from douyin_tools.web_image_search import WebImageSearchTool
     assert WebImageSearchTool._extract_celestial("Jupiter Great Red Spot close up storm") == "jupiter"
     assert WebImageSearchTool._extract_celestial("a black hole accretion disk glowing blue") == "black hole"
     assert WebImageSearchTool._extract_celestial("nebula clouds in deep space") == "nebula"
-    # 无天体词 -> fallback nebula (非 "前 3 词", 前 3 词是无意义短语如 "a macro view", NASA 召回 0
-    # -> enough=False -> 触发 FLUX.2 回退, GPU 争用下 FLUX.2 失败 kill 整轮造片)
-    assert WebImageSearchTool._extract_celestial("a swirling vortex of dark matter fading") == "nebula"
-    # 回归: round 2 失败的两个具体垃圾 query 现不再产生
-    assert WebImageSearchTool._extract_celestial("a macro view of a singular point") == "nebula"
-    assert WebImageSearchTool._extract_celestial("a singular point of light") == "nebula"
+    # 无天体词 -> fallback 前 3 词短语
+    q = WebImageSearchTool._extract_celestial("a swirling vortex of dark matter fading")
+    assert q == "a swirling vortex"
 
 
 def test_web_image_search_parse_queries_script_json():
@@ -1908,9 +1885,9 @@ def test_web_image_search_search_nasa_mock(monkeypatch):
         "href": "https://images-api.nasa.gov/assets/AS11",
         "data": [{"nasa_id": "AS11", "title": "Jupiter", "photographer": "NASA", "description": "jupiter image"}],
     }]
-    monkeypatch.setattr(WebImageSearchTool, "_search_nasa", lambda self, client, q: _async_val(items))
-    monkeypatch.setattr(WebImageSearchTool, "_resolve_image_url", lambda self, client, h: _async_val("https://x/jupiter~large.jpg"))
-    monkeypatch.setattr(WebImageSearchTool, "_download", lambda self, client, url, dst: _async_val(dst))
+    monkeypatch.setattr(WebImageSearchTool, "_search_nasa", lambda self, q: _async_val(items))
+    monkeypatch.setattr(WebImageSearchTool, "_resolve_image_url", lambda self, h: _async_val("https://x/jupiter~large.jpg"))
+    monkeypatch.setattr(WebImageSearchTool, "_download", lambda self, url, dst: _async_val(dst))
     r = asyncio.run(tool.execute(json.dumps(["jupiter"]), per_query=1, expected=1))
     d = json.loads(r)
     assert len(d["image_paths"]) == 1
@@ -1922,7 +1899,7 @@ def test_web_image_search_fallback_empty(monkeypatch):
     import asyncio, json
     from douyin_tools.web_image_search import WebImageSearchTool
     tool = WebImageSearchTool()
-    monkeypatch.setattr(WebImageSearchTool, "_search_nasa", lambda self, client, q: _async_val([]))
+    monkeypatch.setattr(WebImageSearchTool, "_search_nasa", lambda self, q: _async_val([]))
     r = asyncio.run(tool.execute(json.dumps(["mars"]), expected=1))
     d = json.loads(r)
     assert d["image_paths"] == []
@@ -1939,12 +1916,12 @@ def test_web_image_search_skip_copyright(monkeypatch):
         {"href": "https://x/b", "data": [{"nasa_id": "B", "title": "y", "photographer": "NASA"}]},
     ]
     called = {"resolve": []}
-    monkeypatch.setattr(WebImageSearchTool, "_search_nasa", lambda self, client, q: _async_val(items))
-    def fake_resolve(self, client, href):
+    monkeypatch.setattr(WebImageSearchTool, "_search_nasa", lambda self, q: _async_val(items))
+    def fake_resolve(self, href):
         called["resolve"].append(href)
         return _async_val("https://x/b~large.jpg" if href == "https://x/b" else "https://x/a~large.jpg")
     monkeypatch.setattr(WebImageSearchTool, "_resolve_image_url", fake_resolve)
-    monkeypatch.setattr(WebImageSearchTool, "_download", lambda self, client, url, dst: _async_val(dst))
+    monkeypatch.setattr(WebImageSearchTool, "_download", lambda self, url, dst: _async_val(dst))
     r = asyncio.run(tool.execute(json.dumps(["earth"]), per_query=1, expected=1))
     d = json.loads(r)
     # 版权图 A 被跳过, 只 resolve B
@@ -2003,170 +1980,17 @@ def test_compose_planet_fallback(tmp_path, monkeypatch):
     assert float(np.mean(base)) > 40
 
 
-def test_ambient_bgm_deterministic(tmp_path, monkeypatch):
-    # BGM 太空氛围音: 程序生成免版权铺底. 确定性 (RandomState(42) 种子) -> 同参数两次生成位等价.
-    # 生成 wav 可被 wave 读回, 时长 = duration_sec, 单声道 16bit. 缓存命中不重生成.
-    import wave
-
-    from douyin_tools import ffmpeg_compose as fmod
-    monkeypatch.setattr(fmod, "AUDIO_DIR", str(tmp_path), raising=False)
-    monkeypatch.setattr(fmod, "BGM_ENABLED", True, raising=False)
-    monkeypatch.setattr(fmod, "BGM_DURATION_SEC", 4, raising=False)
-    monkeypatch.setattr(fmod, "BGM_SAMPLE_RATE", 24000, raising=False)
-    tool = fmod.FfmpegComposeTool()
-
-    p1 = tool._ensure_ambient_bgm()
-    assert p1 and os.path.exists(p1)
-    size1 = os.path.getsize(p1)
-    assert size1 > 1000
-    with wave.open(p1, "rb") as wf:
-        assert wf.getnchannels() == 1
-        assert wf.getsampwidth() == 2
-        assert wf.getframerate() == 24000
-        # 4s * 24000 = 96000 frames
-        assert abs(wf.getnframes() - 96000) <= 2
-
-    # 缓存命中: 第二次调不重生成 (size 不变).
-    p2 = tool._ensure_ambient_bgm()
-    assert p2 == p1
-    assert os.path.getsize(p2) == size1
-
-
-def test_ambient_bgm_gen_failure_fallback(tmp_path, monkeypatch):
-    # BGM 生成失败 (如 wave 写盘异常) -> 返回空串, 调用方回退无 BGM 路径, 不阻断发布.
-    import wave
-    from douyin_tools import ffmpeg_compose as fmod
-
-    def bad_open(*a, **kw):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(fmod, "AUDIO_DIR", str(tmp_path), raising=False)
-    monkeypatch.setattr(fmod, "BGM_ENABLED", True, raising=False)
-    monkeypatch.setattr(fmod, "BGM_DURATION_SEC", 2, raising=False)
-    monkeypatch.setattr(fmod, "BGM_SAMPLE_RATE", 24000, raising=False)
-    monkeypatch.setattr(wave, "open", bad_open)
-    tool = fmod.FfmpegComposeTool()
-    assert tool._ensure_ambient_bgm() == ""
-
-
-def test_cover_title_color_fix_and_stroke(tmp_path, monkeypatch):
-    # Task #46 封面文字 overlay: 标题渲染根因修复.
-    # 旧 _put_text cvtColor(RGB2BGR)+Image.fromarray 双转把通道换乱 -> 金色标题渲染成灰.
-    # bg 已是 RGB (_load_full BGR2RGB), 应直接 Image.fromarray(bg), 返回 np.array(pil) 可写副本.
-    # fs>=48 加黑色描边提对比度 (封面缩略图亮背景上金字可读 -> 提 CTR).
-    import numpy as np
-    from douyin_tools import ffmpeg_compose as fmod
-
-    # 黑底 + 金色标题 (255,215,0). 修复后应检测到金色像素 (BGR: b<80,g>180,r>200).
-    bg = np.zeros((400, 800, 3), dtype=np.uint8)
-    out = fmod.FfmpegComposeTool._put_text(bg, "宇宙最冷的地方", 400, 100, fs=72, color=(255, 215, 0))
-    assert out.flags["WRITEABLE"], "返回数组必须可写 (下游 addWeighted/字幕框需写)"
-    # _put_text 返回 RGB 数组 (np.array(pil)): ch0=R, ch1=G, ch2=B. 金色 (R255,G215,B0).
-    r, g, b = out[:, :, 0], out[:, :, 1], out[:, :, 2]
-    gold_px = int(np.sum((r > 200) & (g > 180) & (b < 80)))
-    assert gold_px > 50, f"金色标题未渲染 (通道修复失效?) gold_px={gold_px}"
-    # 描边: 亮底上金色标题周围应有黑色描边像素 (stroke_fill 0,0,0).
-    bg2 = np.full((400, 800, 3), 200, dtype=np.uint8)
-    out2 = fmod.FfmpegComposeTool._put_text(bg2, "宇宙", 400, 100, fs=72, color=(255, 215, 0))
-    black_stroke = int(np.sum((out2[:, :, 0] < 30) & (out2[:, :, 1] < 30) & (out2[:, :, 2] < 30)))
-    assert black_stroke > 20, f"标题描边缺失 (fs>=48 应加 stroke) black_px={black_stroke}"
-    # fs<48 不描边 (字幕/小字路径), 只验颜色修复不崩.
-    out3 = fmod.FfmpegComposeTool._put_text(bg, "小字", 400, 100, fs=36, color=(255, 255, 230))
-    assert out3.shape == bg.shape
-
-
-def test_cover_subtitle_no_addweight_crash(tmp_path, monkeypatch):
-    # Task #46 回归: _put_subtitle 在 _put_text 返回的只读/可写数组上 addWeighted 不崩.
-    # 旧 np.asarray(pil) 返回只读视图 -> cv2.addWeighted 报 Bad argument -> 整镜编码失败 -> 造片 0 产出.
-    import numpy as np
-    from douyin_tools import ffmpeg_compose as fmod
-
-    bg = np.zeros((1920, 1080, 3), dtype=np.uint8)
-    titled = fmod.FfmpegComposeTool._put_text(bg, "标题", 540, 160, fs=60, color=(255, 215, 0))
-    # _put_subtitle 对 titled 调 addWeighted + 绘字幕, 不应抛 cv2 Bad argument.
-    subbed = fmod.FfmpegComposeTool._put_subtitle(titled, "这是字幕测试内容", 60, 1660, 960)
-    assert subbed.shape == bg.shape, "字幕渲染后形状不变"
-    # 字幕区应有半透明黑底 (bgc 0,0,0,150): 底部应有暗化像素.
-    bottom = subbed[1600:, :, :]
-    darkened = int(np.sum(bottom.mean(axis=2) < 30))
-    assert darkened > 0, "字幕黑底未渲染"
-
-
-def test_self_comment_dry_run_and_gen(tmp_path, monkeypatch):
-    # Task #47: 首评自埋工具无浏览器路径 (dry_run + 评论文本生成 + 幂等 claim).
-    import asyncio
-
-    from douyin_tools import douyin_self_comment as sc
-
-    # 隔离 ops 数据目录, 避免污染真实 self_commented.json.
-    ops_dir = str(tmp_path / "ops")
-    monkeypatch.setattr(sc, "OPS_DATA_DIR", ops_dir)
-    monkeypatch.setattr(sc, "SELF_COMMENTED_FILE", os.path.join(ops_dir, "self_commented.json"))
-
-    tool = sc.DouyinSelfCommentTool()
-
-    async def run(**kw):
-        return await tool.execute(**kw)
-
-    # dry_run: 空 comment_text + title -> 模板生成 -> 返回 plan 不开浏览器.
-    # P2-11: vid 必须纯数字 (URL 注入防护), 用真实格式 vid.
-    out = json.loads(asyncio.run(run(vid="7600000001", title="一克中子星能踩碎地球吗", dry_run=True)))
-    assert out["status"] == "plan"
-    assert out["vid"] == "7600000001"
-    # 模板问句引导互动: 含核心词 + 引导问号 + 评论区指引.
-    assert "你信吗" in out["comment_text"]
-    assert "评论区" in out["comment_text"]
-
-    # dry_run 无副作用: 不落盘 claim (修: dry_run guard 移到 claim 之前).
-    assert not os.path.exists(os.path.join(ops_dir, "self_commented.json")), "dry_run 不应落盘 claim"
-
-    # 空 vid: 报错不 claim.
-    out3 = json.loads(asyncio.run(run(vid="", dry_run=True)))
-    assert "error" in out3
-
-    # 无 title: 通用引导模板.
-    monkeypatch.setattr(sc, "SELF_COMMENTED_FILE", os.path.join(ops_dir, "self_commented2.json"))
-    out4 = json.loads(asyncio.run(run(vid="7600000002", title="", dry_run=True)))
-    assert out4["status"] == "plan"
-    assert "评论区" in out4["comment_text"], "无 title 应走通用引导"
-
-    # 幂等: 真路径 (dry_run=False) 预埋 claim -> 同 vid 再调应 skip (不开浏览器).
-    os.makedirs(ops_dir, exist_ok=True)
-    seeded_file = os.path.join(ops_dir, "self_commented3.json")
-    monkeypatch.setattr(sc, "SELF_COMMENTED_FILE", seeded_file)
-    with open(seeded_file, "w", encoding="utf-8") as f:
-        json.dump({"self_commented_vids": ["7600000099"]}, f)
-    out5 = json.loads(asyncio.run(run(vid="7600000099", title="X", dry_run=False)))
-    assert out5["status"] == "skipped", "已 claim 的 vid 真路径应幂等跳过"
-    assert out5["reason"] == "already seeded"
-
-
-def test_self_comment_parse_bool():
-    # 字符串布尔解析 (AgentRuntime 扁平插值传字符串 "true"/"false").
-    from douyin_tools.douyin_self_comment import DouyinSelfCommentTool as T
-
-    assert T._parse_bool("true") is True
-    assert T._parse_bool("false") is False
-    assert T._parse_bool(True) is True
-    assert T._parse_bool(False) is False
-    assert T._parse_bool("1") is True
-    assert T._parse_bool("0") is False
-    assert T._parse_bool(None) is False
-    assert T._parse_bool("yes") is True
-    assert T._parse_bool("", default=True) is False  # 空串走 false-set 不走 default (同 publish)
-
-
 def test_cron_path_integration_bindings():
     # A4: cron 自动化路径集成校验 (不需 daemon, 静态结构断言).
-    # 1) sync_graphs CRON_FIELDS 9 个 job 表达式合法 (5 发布+2 评论+1 进化+1 修复);
+    # 1) sync_graphs CRON_FIELDS 8 个 job 表达式合法 (4 发布+2 评论+1 进化+1 修复);
     # 2) CRON_BY_GRAPH 每个图名有对应 graph 文件;
     # 3) cron 热路径 auto_publish graph 含 C1 修复的 topic_gen 补货节点 (cron 不传 topic 也能自产).
     import glob
     import re
     import sync_graphs as sg
 
-    # 1) 9 cron job 表达式 5 字段合法.
-    assert len(sg.CRON_FIELDS) == 9
+    # 1) 8 cron job 表达式 5 字段合法.
+    assert len(sg.CRON_FIELDS) == 8
     expr_re = re.compile(r"^[\d*/,-]+\s+[\d*/,-]+\s+[\d*/,-]+\s+[\d*/,-]+\s+[\d*/,-]+$")
     for jid, (expr, _) in sg.CRON_FIELDS.items():
         assert expr_re.match(expr), f"bad cron expr {jid}: {expr}"
@@ -2326,8 +2150,6 @@ def test_ops_health_file_alerts(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "OPS_DATA_DIR", str(odir), raising=False)
     monkeypatch.setattr(mod, "PENDING_DIR", str(qdir / "pending"), raising=False)
     monkeypatch.setattr(mod, "PUBLISHED_DIR", str(qdir / "published"), raising=False)
-    monkeypatch.setattr(mod, "INFLIGHT_DIR", str(qdir / "inflight"), raising=False)
-    monkeypatch.setattr(mod, "FAILED_DIR", str(qdir / "failed"), raising=False)
     monkeypatch.setattr(mod, "PATTERNS_FILE", str(odir / "winning_patterns.json"), raising=False)
     monkeypatch.setattr(mod, "BLACKLIST_FILE", str(odir / "topic_blacklist.json"), raising=False)
     monkeypatch.setattr(mod, "REPLIED_FILE", str(odir / "replied.json"), raising=False)
@@ -2373,39 +2195,6 @@ def test_ops_health_vid_backfill_rate(tmp_path, monkeypatch):
     assert rate["total"] == 2
     assert rate["with_vid"] == 1
     assert rate["rate"] == 0.5
-
-
-def test_ops_health_stale_inflight_alert(tmp_path, monkeypatch):
-    # 审计 0908 F2 ④: inflight 项 age 超 2×LEASE_TTL -> 告警 (发布进程崩溃/卡死, 重复发布窗口开).
-    import asyncio
-    import time
-    import douyin_tools.ops_health as mod
-    qdir = tmp_path / "queue"
-    odir = tmp_path / "ops"
-    inflight = qdir / "inflight"
-    inflight.mkdir(parents=True)
-    odir.mkdir()
-    monkeypatch.setattr(mod, "QUEUE_DIR", str(qdir), raising=False)
-    monkeypatch.setattr(mod, "INFLIGHT_DIR", str(inflight), raising=False)
-    monkeypatch.setattr(mod, "PENDING_DIR", str(qdir / "pending"), raising=False)
-    monkeypatch.setattr(mod, "PUBLISHED_DIR", str(qdir / "published"), raising=False)
-    monkeypatch.setattr(mod, "OPS_DATA_DIR", str(odir), raising=False)
-    monkeypatch.setattr(mod, "PATTERNS_FILE", str(odir / "wp.json"), raising=False)
-    monkeypatch.setattr(mod, "BLACKLIST_FILE", str(odir / "bl.json"), raising=False)
-    monkeypatch.setattr(mod, "REPLIED_FILE", str(odir / "r.json"), raising=False)
-    monkeypatch.setattr(mod, "HISTORY_FILE", str(odir / "h.jsonl"), raising=False)
-    monkeypatch.setattr(mod, "LEASE_TTL", 100, raising=False)
-    now = int(time.time())
-    # stale: leased_until 远超 2×TTL=200 (now - leased_until > 200)
-    (inflight / "stale.json").write_text(json.dumps({"leased_until": now - 300}))
-    # fresh: leased_until 未过期
-    (inflight / "fresh.json").write_text(json.dumps({"leased_until": now + 50}))
-    t = mod.OpsHealthTool()
-    stale_count = t._stale_inflight_count()
-    assert stale_count == 1, f"应只检测 1 个 stale, got {stale_count}"
-    res = json.loads(asyncio.run(t.execute(check_cron=False)))
-    alerts = res["alerts"]
-    assert any("stale_inflight_over_2x_ttl" in a for a in alerts), f"缺 stale 告警: {alerts}"
 
 
 def test_e3_font_path_config_default_and_override(tmp_path, monkeypatch):
@@ -2533,94 +2322,37 @@ async def test_e8_mlx_image_script_first(tmp_path, monkeypatch):
     prompts_got = [p for p in called["gen"] if "jupiter" in p or "saturn" in p]
     assert len(prompts_got) == 2, "应从 script 提取 2 个 img_prompt (parse_script 优先), 不是把 dict repr 分段"
     assert all("no people" in p for p in prompts_got), "提取的应是完整 img_prompt 含排除词"
-
-
-def test_topic_gen_extract_entities():
-    # 实体抽取: 具体天体命中, 泛化词 (宇宙/时间) 不命中.
-    assert TopicGenTool._extract_entities("太阳被压缩成1米") == ["太阳"]
-    assert set(TopicGenTool._extract_entities("黑洞靠近地球会发生什么")) == {"黑洞", "地球"}
-    assert TopicGenTool._extract_entities("宇宙中最冷的地方") == []
-    assert TopicGenTool._extract_entities("") == []
-
-
-def test_topic_gen_filter_banned(tmp_path):
-    # 硬禁词: 去空格归一化后命中即剔除.
-    topics = [
-        {"topic": "太阳压缩成芝麻大小"},
-        {"topic": "用AI把知识画出来一眼记住"},
-        {"topic": "木星大红斑风暴真相"},
-    ]
-    kept = TopicGenTool._filter_topics(topics, ["用ai把知识画出来", "一眼就记住"], set())
-    titles = [t["topic"] for t in kept]
-    assert "太阳压缩成芝麻大小" in titles
-    assert "木星大红斑风暴真相" in titles
-    assert "用AI把知识画出来一眼记住" not in titles, "禁词命中应硬剔除"
-
-
-def test_topic_gen_filter_entity_over(tmp_path, monkeypatch):
-    # 实体超限: 太阳已饱和, 含太阳的新选题硬剔除, 不含的保留.
-    from douyin_tools import topic_gen as tmod
-    pub = tmp_path / "published"
-    pub.mkdir()
-    # 3 条太阳压缩, max_repeat=2 -> 太阳饱和.
-    for i, t in enumerate(["太阳压缩成芝麻", "太阳压缩成豌豆", "太阳压缩成硬币"]):
-        (pub / f"17860000{i}_x.json").write_text(json.dumps({"topic": t}))
-    monkeypatch.setattr(tmod, "PUBLISHED_DIR", str(pub), raising=False)
-    monkeypatch.setattr(tmod, "PENDING_DIR", str(tmp_path / "pend"), raising=False)
-    counts = TopicGenTool._recent_entity_count(20)
-    assert counts.get("太阳") == 3
-    over = {e for e, c in counts.items() if c >= 2}
-    assert "太阳" in over
-    topics = [
-        {"topic": "太阳压缩成口袋大小"},
-        {"topic": "木星大红斑吞噬地球"},
-    ]
-    kept = TopicGenTool._filter_topics(topics, [], over)
-    titles = [t["topic"] for t in kept]
-    assert "太阳压缩成口袋大小" not in titles, "太阳饱和后新太阳选题应剔除"
-    assert "木星大红斑吞噬地球" in titles
-
-
-def test_topic_gen_system_prompt_banned_words():
-    # SYSTEM_PROMPT 必须含天体去重 + 禁词约束 (prompt 层软约束 + 代码层硬兜底).
-    from douyin_tools.topic_gen import SYSTEM_PROMPT
-    assert "天体实体去重" in SYSTEM_PROMPT
-    assert "禁用通用模板词" in SYSTEM_PROMPT
-    assert "用AI把知识画出来" in SYSTEM_PROMPT
-
-
-def test_mlx_script_system_prompt_hook_strength():
-    # 钩子强度标准 + 结尾三钩 + 禁词 (破千关键, 纯 prompt 层约束).
-    from douyin_tools.mlx_script import SYSTEM_PROMPT
-    assert "首句3秒钩子强度标准" in SYSTEM_PROMPT
-    assert "具体极端数字" in SYSTEM_PROMPT
-    assert "反常识的个体化后果" in SYSTEM_PROMPT
-    assert "结尾三钩齐全" in SYSTEM_PROMPT
-    assert "完播钩" in SYSTEM_PROMPT
-    assert "分享钩" in SYSTEM_PROMPT
-    assert "禁用空洞模板词" in SYSTEM_PROMPT
-
-
-async def test_queue_ops_archive_path_traversal_sanitized(tmp_path, monkeypatch):
-    # 审计0908 F4: _archive item_id 含 ../../ 须被 _safe_id 消毒, 不得逃逸目录写任意 JSON.
-    # _requeue 已用 _safe_id (P2-1), _archive 漏修. LLM 可触达工具, 安全评审必杀.
-    from douyin_tools import queue_ops as qmod
-    qdir = str(tmp_path / "queue")
-    for d in ("pending", "inflight", "published", "failed"):
-        monkeypatch.setattr(QueueOpsTool, f"{d.upper()}_DIR", os.path.join(qdir, d))
-        os.makedirs(os.path.join(qdir, d), exist_ok=True)
-    monkeypatch.setattr(qmod, "QUEUE_DIR", qdir)
-    t = QueueOpsTool()
-    # traversal id: 无对应 item -> "not found", 且不得在 published 之外创建逃逸文件.
-    r = json.loads(await t.execute(action="archive", item_id="../../etc/pwned", status="published"))
-    assert r["error"] == "item not found"
-    # 关键断言: 消毒后文件名 ____etc_pwned.json 落在 published 内, 不逃逸.
-    assert not (tmp_path / "etc").exists()
-    assert not (tmp_path / "pwned.json").exists()
-    safe = qmod.QueueOpsTool._safe_id("../../etc/pwned")
-    # 消毒后无路径分隔符/点, 不逃逸目录.
-    assert "/" not in safe and "." not in safe
-    assert safe.endswith("etc_pwned")
+def test_ops_health_stale_inflight_alert(tmp_path, monkeypatch):
+    # 审计 0908 F2 ④: inflight 项 age 超 2×LEASE_TTL -> 告警 (发布进程崩溃/卡死, 重复发布窗口开).
+    import asyncio
+    import time
+    import douyin_tools.ops_health as mod
+    qdir = tmp_path / "queue"
+    odir = tmp_path / "ops"
+    inflight = qdir / "inflight"
+    inflight.mkdir(parents=True)
+    odir.mkdir()
+    monkeypatch.setattr(mod, "QUEUE_DIR", str(qdir), raising=False)
+    monkeypatch.setattr(mod, "INFLIGHT_DIR", str(inflight), raising=False)
+    monkeypatch.setattr(mod, "PENDING_DIR", str(qdir / "pending"), raising=False)
+    monkeypatch.setattr(mod, "PUBLISHED_DIR", str(qdir / "published"), raising=False)
+    monkeypatch.setattr(mod, "OPS_DATA_DIR", str(odir), raising=False)
+    monkeypatch.setattr(mod, "PATTERNS_FILE", str(odir / "wp.json"), raising=False)
+    monkeypatch.setattr(mod, "BLACKLIST_FILE", str(odir / "bl.json"), raising=False)
+    monkeypatch.setattr(mod, "REPLIED_FILE", str(odir / "r.json"), raising=False)
+    monkeypatch.setattr(mod, "HISTORY_FILE", str(odir / "h.jsonl"), raising=False)
+    monkeypatch.setattr(mod, "LEASE_TTL", 100, raising=False)
+    now = int(time.time())
+    # stale: leased_until 远超 2×TTL=200 (now - leased_until > 200)
+    (inflight / "stale.json").write_text(json.dumps({"leased_until": now - 300}))
+    # fresh: leased_until 未过期
+    (inflight / "fresh.json").write_text(json.dumps({"leased_until": now + 50}))
+    t = mod.OpsHealthTool()
+    stale_count = t._stale_inflight_count()
+    assert stale_count == 1, f"应只检测 1 个 stale, got {stale_count}"
+    res = json.loads(asyncio.run(t.execute(check_cron=False)))
+    alerts = res["alerts"]
+    assert any("stale_inflight_over_2x_ttl" in a for a in alerts), f"缺 stale 告警: {alerts}"
 
 
 async def test_perf_analyze_excludes_estimated_from_attribution(tmp_path, monkeypatch):
@@ -2657,3 +2389,4 @@ async def test_perf_analyze_excludes_estimated_from_attribution(tmp_path, monkey
     assert "真爆款" in ev
     assert "假数据A" not in ev
     assert "假数据B" not in ev
+

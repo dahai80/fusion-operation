@@ -6,7 +6,7 @@ import time
 
 from tools.base import BaseTool
 
-from .config import OPS_DATA_DIR, QUEUE_DIR, AGENT_STUDIO_SOCKET, ensure_dirs, get_json_config
+from .config import OPS_DATA_DIR, QUEUE_DIR, AGENT_STUDIO_SOCKET, LEASE_TTL, ensure_dirs, get_json_config
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,8 @@ CRON_FAIL_RATE_THRESHOLD = 0.30
 EVOLVE_STALE_HOURS = 30
 REPLIED_STALE_HOURS = 48
 LOW_PENDING_THRESHOLD = 3
-# lease TTL: 须与 queue_ops.LEASE_TTL 同源 (审计 0908 F2 ④ stale-inflight 告警阈值 = 2×TTL).
-# master queue_ops 定义为本地常量读 DOUYIN_LEASE_TTL env default 300; 此处镜像同源读法.
-# WIP 已上调 default 至 1800 覆盖最坏发布耗时 (审计 P0-1); 此处取 1800 保一致.
-LEASE_TTL = int(os.environ.get("DOUYIN_LEASE_TTL", "1800"))
+# lease TTL: 从 config 单源导入 (审计 0908 F2 ④ stale-inflight 告警阈值 = 2×LEASE_TTL).
+# queue_ops.dequeue + ops_health 共用同一 LEASE_TTL, env DOUYIN_LEASE_TTL 可覆盖, default 1800.
 # 审计 P2-7: 期望 cron job 数硬编码 7, 实际 9 (5 发布+2 评论+1 进化+1 修复).
 # 改从 douyin_config.json scheduler.cron_jobs 声明式读, 未声明回退 9.
 try:

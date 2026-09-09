@@ -7,7 +7,7 @@ import httpx
 from tools.base import BaseTool
 
 from . import config
-from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, mlx_headers
+from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, mlx_headers, get_json_config
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,20 @@ class PerfAnalyzeTool(BaseTool):
             logger.warning("perf_analyze: no history")
             return json.dumps({"error": "no history", "patterns_file": ""}, ensure_ascii=False)
         latest = self._latest_per_vid(rows)
-        ranked = sorted(latest.values(), key=lambda r: -r.get("plays", 0))
+        # 审计0908 F3: estimated 行 plays 被强制置 0 -> 永落 cold 切片 -> 归因提取假"差片共性"
+        # -> 回灌生成端 -> 自增强污染闭环 (系统核心价值主张失效). perf_track._rank 已排除,
+        # perf_analyze (决策层) 漏修. 止血: 归因输入只取真实数据行.
+        all_rows = list(latest.values())
+        estimated_count = sum(1 for r in all_rows if r.get("estimated"))
+        ranked = sorted(
+            [r for r in all_rows if not r.get("estimated")],
+            key=lambda r: -r.get("plays", 0),
+        )
+        if estimated_count:
+            logger.warning(
+                "perf_analyze excluded %d estimated rows from attribution (total=%d real=%d)",
+                estimated_count, len(all_rows), len(ranked),
+            )
         if len(ranked) < int(min_samples):
             logger.warning("perf_analyze: samples=%d < min=%d", len(ranked), min_samples)
             return json.dumps(
@@ -59,7 +72,12 @@ class PerfAnalyzeTool(BaseTool):
         n = len(ranked)
         top_n = max(1, n // 5)
         hot = ranked[:top_n]
-        cold = [r for r in ranked if r.get("plays", 0) < 50][-top_n:]
+        # 审计 P3-6: cold 阈值硬编码 50, 与 perf_track COLD_PLAYS_MAX 分叉. 读同源 config.
+        try:
+            cold_plays_max = int(get_json_config().get("perf_track", {}).get("cold_plays_max", 50))
+        except (TypeError, ValueError):
+            cold_plays_max = 50
+        cold = [r for r in ranked if r.get("plays", 0) < cold_plays_max][-top_n:]
         evidence = self._build_evidence(hot, cold, scripts)
         logger.info(
             "perf_analyze evidence total=%d hot=%d cold=%d scripts=%d",
@@ -85,10 +103,13 @@ class PerfAnalyzeTool(BaseTool):
         }
         # 原子写: temp + os.replace. 旧实现直接 open(w) truncate, 进程中途 crash (OOM/SIGKILL/OSError)
         # 残留半截 JSON -> topic_gen/mlx_script 下次读 json.load 崩 -> 进化回灌断 (8-20→8-24 静默 4 天根因).
+        # 审计 P2-10: 加 file_lock 防 topic_gen 并发读半写状态.
+        from .script_helpers import file_lock
         tmp_path = PATTERNS_FILE + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, PATTERNS_FILE)
+        with file_lock(PATTERNS_FILE):
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, PATTERNS_FILE)
         logger.info("perf_analyze ok written=%s hot=%d hooks=%s", PATTERNS_FILE, len(hot), out["winning_hooks"])
         return json.dumps({"status": "analyzed", "patterns_file": PATTERNS_FILE, **out}, ensure_ascii=False)
 
@@ -191,13 +212,21 @@ class PerfAnalyzeTool(BaseTool):
     @staticmethod
     def _latest_per_vid(rows):
         latest = {}
+        latest_ts = {}
+        from .perf_track import PerfTrackTool
         for r in rows:
             vid = r.get("vid", "")
             if not vid:
                 continue
+            # 审计 0906 P3-5: 字符串字典序比 snapshot_at 格式混时不一致 (perf_track 已改 epoch).
+            # 统一 _parse_snap_time -> epoch 比较.
+            sa = r.get("snapshot_at", "")
+            dt = PerfTrackTool._parse_snap_time(sa)
+            ts = dt.timestamp() if dt else 0
             cur = latest.get(vid)
-            if cur is None or r.get("snapshot_at", "") > cur.get("snapshot_at", ""):
+            if cur is None or ts >= latest_ts.get(vid, -1):
                 latest[vid] = r
+                latest_ts[vid] = ts
         return latest
 
     @staticmethod
@@ -210,57 +239,6 @@ class PerfAnalyzeTool(BaseTool):
 
     @staticmethod
     def _extract_json(content):
-        s = content.strip()
-        if s.startswith("```"):
-            s = s.split("```")[1]
-            if s.startswith("json"):
-                s = s[4:]
-            s = s.strip()
-        start = s.find("{")
-        if start == -1:
-            return None
-        depth = 0
-        in_str = False
-        esc = False
-        end = -1
-        for i in range(start, len(s)):
-            c = s[i]
-            if in_str:
-                if esc:
-                    esc = False
-                elif c == "\\":
-                    esc = True
-                elif c == '"':
-                    in_str = False
-                continue
-            if c == '"':
-                in_str = True
-            elif c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-        if end == -1:
-            if depth > 0:
-                tail = s[start:].rstrip()
-                cands = [
-                    tail + ("}" * depth),
-                    tail[:-1] + "}",
-                    tail + "}",
-                ]
-                seen = set()
-                for cand in cands:
-                    if cand in seen:
-                        continue
-                    seen.add(cand)
-                    try:
-                        return json.loads(cand)
-                    except ValueError:
-                        continue
-            return None
-        try:
-            return json.loads(s[start : end + 1])
-        except ValueError:
-            return None
+        # 统一到 script_helpers.extract_json (审计 P2-5).
+        from .script_helpers import extract_json
+        return extract_json(content)

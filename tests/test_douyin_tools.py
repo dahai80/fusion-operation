@@ -2197,6 +2197,39 @@ def test_ops_health_vid_backfill_rate(tmp_path, monkeypatch):
     assert rate["rate"] == 0.5
 
 
+def test_ops_health_stale_inflight_alert(tmp_path, monkeypatch):
+    # 审计 0908 F2 ④: inflight 项 age 超 2×LEASE_TTL -> 告警 (发布进程崩溃/卡死, 重复发布窗口开).
+    import asyncio
+    import time
+    import douyin_tools.ops_health as mod
+    qdir = tmp_path / "queue"
+    odir = tmp_path / "ops"
+    inflight = qdir / "inflight"
+    inflight.mkdir(parents=True)
+    odir.mkdir()
+    monkeypatch.setattr(mod, "QUEUE_DIR", str(qdir), raising=False)
+    monkeypatch.setattr(mod, "INFLIGHT_DIR", str(inflight), raising=False)
+    monkeypatch.setattr(mod, "PENDING_DIR", str(qdir / "pending"), raising=False)
+    monkeypatch.setattr(mod, "PUBLISHED_DIR", str(qdir / "published"), raising=False)
+    monkeypatch.setattr(mod, "OPS_DATA_DIR", str(odir), raising=False)
+    monkeypatch.setattr(mod, "PATTERNS_FILE", str(odir / "wp.json"), raising=False)
+    monkeypatch.setattr(mod, "BLACKLIST_FILE", str(odir / "bl.json"), raising=False)
+    monkeypatch.setattr(mod, "REPLIED_FILE", str(odir / "r.json"), raising=False)
+    monkeypatch.setattr(mod, "HISTORY_FILE", str(odir / "h.jsonl"), raising=False)
+    monkeypatch.setattr(mod, "LEASE_TTL", 100, raising=False)
+    now = int(time.time())
+    # stale: leased_until 远超 2×TTL=200 (now - leased_until > 200)
+    (inflight / "stale.json").write_text(json.dumps({"leased_until": now - 300}))
+    # fresh: leased_until 未过期
+    (inflight / "fresh.json").write_text(json.dumps({"leased_until": now + 50}))
+    t = mod.OpsHealthTool()
+    stale_count = t._stale_inflight_count()
+    assert stale_count == 1, f"应只检测 1 个 stale, got {stale_count}"
+    res = json.loads(asyncio.run(t.execute(check_cron=False)))
+    alerts = res["alerts"]
+    assert any("stale_inflight_over_2x_ttl" in a for a in alerts), f"缺 stale 告警: {alerts}"
+
+
 def test_e3_font_path_config_default_and_override(tmp_path, monkeypatch):
     # E3: FONT_PATH 进配置. 默认空 -> 走系统字体回退链 (STHeiti/PingFang).
     # 非空用配置值, 不存在回退系统字体. 静态常量 import 时求值, 测试用 reload 模块.

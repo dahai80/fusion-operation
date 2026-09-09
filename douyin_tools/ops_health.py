@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -5,7 +6,7 @@ import time
 
 from tools.base import BaseTool
 
-from .config import OPS_DATA_DIR, QUEUE_DIR, AGENT_STUDIO_SOCKET, ensure_dirs
+from .config import OPS_DATA_DIR, QUEUE_DIR, AGENT_STUDIO_SOCKET, ensure_dirs, get_json_config
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,17 @@ CRON_FAIL_RATE_THRESHOLD = 0.30
 EVOLVE_STALE_HOURS = 30
 REPLIED_STALE_HOURS = 48
 LOW_PENDING_THRESHOLD = 3
+# lease TTL: 须与 queue_ops.LEASE_TTL 同源 (审计 0908 F2 ④ stale-inflight 告警阈值 = 2×TTL).
+# master queue_ops 定义为本地常量读 DOUYIN_LEASE_TTL env default 300; 此处镜像同源读法.
+# WIP 已上调 default 至 1800 覆盖最坏发布耗时 (审计 P0-1); 此处取 1800 保一致.
+LEASE_TTL = int(os.environ.get("DOUYIN_LEASE_TTL", "1800"))
+# 审计 P2-7: 期望 cron job 数硬编码 7, 实际 9 (5 发布+2 评论+1 进化+1 修复).
+# 改从 douyin_config.json scheduler.cron_jobs 声明式读, 未声明回退 9.
+try:
+    _cfg_cron = get_json_config().get("scheduler", {}).get("cron_jobs", 9)
+    EXPECTED_CRON_JOBS = int(_cfg_cron) if int(_cfg_cron) > 0 else 9
+except (TypeError, ValueError):
+    EXPECTED_CRON_JOBS = 9
 
 
 class OpsHealthTool(BaseTool):
@@ -71,6 +83,14 @@ class OpsHealthTool(BaseTool):
         return json.dumps(out, ensure_ascii=False)
 
     @staticmethod
+    def _safe_int(v, default=0):
+        # 审计 P3-7: int(None/"") 崩, 非数字字符串也崩. 统一安全转 int.
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def _count_dir(d):
         if not os.path.isdir(d):
             return 0
@@ -91,9 +111,42 @@ class OpsHealthTool(BaseTool):
             out.append(f"low_stock: pending={q['pending']} 库存不足, 补货链需检查")
         if q["inflight"] > 0:
             out.append(f"stuck_inflight: inflight={q['inflight']} 有卡住未归档项")
+        # 审计 0908 F2 ④: inflight 超 2×LEASE_TTL = 发布进程崩溃/卡死未归档, 重复发布窗口已打开.
+        # lease 到期 _reclaim_expired 会移回 pending 重发, 但若 inflight 项 age 远超 2×TTL 仍在,
+        # 说明 reclaim 本身没跑 (dequeue 路径未触发) 或 daemon 死锁. 告警人工介入.
+        stale = OpsHealthTool._stale_inflight_count()
+        stale_threshold = 2 * LEASE_TTL
+        if stale > 0:
+            out.append(
+                f"stale_inflight_over_2x_ttl: stale={stale} threshold={stale_threshold}s "
+                f"发布进程疑似崩溃/卡死, 重复发布窗口已打开, 需人工介入"
+            )
         if q["failed"] > 0:
             out.append(f"failed_items: failed={q['failed']} 有失败视频待排查")
         return out
+
+    @staticmethod
+    def _stale_inflight_count():
+        # 扫 inflight, age (now - leased_until) 超 2×LEASE_TTL 的项 = lease 早过期但未被 reclaim.
+        # 正常 reclaim 在下轮 dequeue 触发; 持续超时说明 daemon 不健康或 dequeue 路径断.
+        if not os.path.isdir(INFLIGHT_DIR):
+            return 0
+        now = int(time.time())
+        threshold = 2 * LEASE_TTL
+        stale = 0
+        for fn in os.listdir(INFLIGHT_DIR):
+            if not fn.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(INFLIGHT_DIR, fn), encoding="utf-8") as f:
+                    item = json.load(f)
+            except (ValueError, OSError):
+                stale += 1
+                continue
+            leased_until = item.get("leased_until", 0)
+            if leased_until and now - leased_until > threshold:
+                stale += 1
+        return stale
 
     @staticmethod
     def _file_mtimes():
@@ -132,7 +185,12 @@ class OpsHealthTool(BaseTool):
     async def _cron_health(self, days):
         from agent_runtime.sdk.client import AgentClient
         client = AgentClient(socket_path=AGENT_STUDIO_SOCKET)
-        res = await client.call("cron.list", {})
+        # 审计 P2-9: client.call 无 timeout, daemon hang (非 down) -> 无限阻塞 -> ops_health 卡死无法报警.
+        # 加 asyncio.wait_for 10s 预算.
+        try:
+            res = await asyncio.wait_for(client.call("cron.list", {}), timeout=10)
+        except asyncio.TimeoutError:
+            raise RuntimeError("cron.list timed out >10s (daemon hang?)")
         if res.get("error"):
             raise RuntimeError(f"cron.list failed: {res['error']}")
         jobs = res.get("jobs", [])
@@ -144,11 +202,14 @@ class OpsHealthTool(BaseTool):
             jid = job.get("id", "")
             runs = []
             try:
-                er = await client.call("cron.list_executions", {"job_id": jid, "limit": 50})
+                er = await asyncio.wait_for(
+                    client.call("cron.list_executions", {"job_id": jid, "limit": 50}), timeout=10
+                )
                 runs = er.get("executions", []) or []
-            except Exception as e:
+            except (Exception, asyncio.TimeoutError) as e:
                 logger.warning("cron.list_executions failed job=%s: %s", jid, e)
-            recent = [r for r in runs if int(r.get("executed_at", 0) or 0) >= cutoff]
+            # 审计 P3-7: int(executed_at) 假定 int, 非数字/None 崩 -> 用 _safe_int 守卫.
+            recent = [r for r in runs if self._safe_int(r.get("executed_at")) >= cutoff]
             j_total = len(recent)
             j_fail = sum(1 for r in recent if (r.get("status") or "") != "success")
             total_exec += j_total
@@ -173,8 +234,10 @@ class OpsHealthTool(BaseTool):
     @staticmethod
     def _cron_alerts(cron):
         out = []
-        if cron.get("job_count", 0) < 7:
-            out.append(f"cron_jobs_missing: 期望 7 个 cron job, 实际 {cron.get('job_count', 0)}")
+        # 审计 P2-7: 阈值硬编码 7, 实际 9 job. 改读 EXPECTED_CRON_JOBS (声明式配置层).
+        expected = EXPECTED_CRON_JOBS
+        if cron.get("job_count", 0) < expected:
+            out.append(f"cron_jobs_missing: 期望 {expected} 个 cron job, 实际 {cron.get('job_count', 0)}")
         for j in cron.get("per_job", []):
             if not j.get("enabled"):
                 out.append(f"cron_disabled: {j['id']} 被禁用")

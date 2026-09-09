@@ -3,12 +3,11 @@ import json
 import logging
 import os
 import re
-import signal
-import subprocess
 
 from tools.base import BaseTool
 
-from .config import DOUYIN_PROFILE, DOUYIN_UPLOAD_URL, DOUYIN_MANAGE_URL
+from .config import DOUYIN_UPLOAD_URL, DOUYIN_MANAGE_URL
+from .playwright_profile import profile_lock, launch_with_retry, parse_bool
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +37,8 @@ class DouyinPublishTool(BaseTool):
         headless=False,
         **_,
     ):
-        dry_run = self._parse_bool(dry_run, default=True)
-        headless = self._parse_bool(headless, default=False)
+        dry_run = parse_bool(dry_run, default=True)
+        headless = parse_bool(headless, default=False)
         if not os.path.exists(video_path):
             logger.error("video not exist %s", video_path)
             return json.dumps({"error": "video not exist"})
@@ -57,20 +56,26 @@ class DouyinPublishTool(BaseTool):
             return json.dumps({"error": "playwright not installed"})
 
         result = {"dry_run": dry_run}
+        ctx = None
         try:
-            async with async_playwright() as p:
-                ctx = await self._launch_with_retry(p, headless)
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                before = await self._get_work_count(page)
-                logger.info("publish before_count=%d", before)
-                # R6: 发布前抓 vid 快照, 传给 _publish -> _capture_new_vid 做 post/pre diff.
-                # 并发 cron/手动发片时 batch[0] 可能是别人新作品, diff 才精确定位刚发的.
-                pre_vids = await self._fetch_vid_list(page)
-                logger.info("publish pre_vids snapshot count=%d", len(pre_vids))
-                ok = await self._publish(
-                    page, video_path, description, title, dry_run, before, pre_vids
-                )
-                await ctx.close()
+            with profile_lock():
+                async with async_playwright() as p:
+                    ctx = await launch_with_retry(p, headless)
+                    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                    before = await self._get_work_count(page)
+                    logger.info("publish before_count=%d", before)
+                    # R6: 发布前抓 vid 快照, 传给 _publish -> _capture_new_vid 做 post/pre diff.
+                    # 并发 cron/手动发片时 batch[0] 可能是别人新作品, diff 才精确定位刚发的.
+                    pre_vids = await self._fetch_vid_list(page)
+                    logger.info("publish pre_vids snapshot count=%d", len(pre_vids))
+                    ok = await self._publish(
+                        page, video_path, description, title, dry_run, before, pre_vids
+                    )
+                    # 审计 P1-14: 异常路径 ctx.close() 在 try 内, 抛错时跳过 close ->
+                    # chrome 持 profile 独占锁 -> 后续发布全 TargetClosedError.
+                    # 改 try-finally 保证 close (finally 在外层).
+                    await ctx.close()
+                    ctx = None
             dry_ok = bool(ok.get("ok")) if isinstance(ok, dict) else bool(ok)
             if dry_run:
                 result["status"] = "dry_run_ok" if dry_ok else "publish_failed"
@@ -85,82 +90,13 @@ class DouyinPublishTool(BaseTool):
         except Exception as e:
             logger.exception("douyin_publish failed")
             return json.dumps({"error": str(e)})
-
-    @staticmethod
-    def _kill_stale_profile_chrome():
-        # 清残留 Testing chrome (同 user-data-dir=douyin_profile).
-        # 前台/上次 publish 残留进程会占用 profile 独占锁 ->
-        # launch_persistent_context 报 TargetClosedError ("正在现有的浏览器会话中打开").
-        # 只清用 DOUYIN_PROFILE 的 Testing chrome, 不动用户日常 chrome.
-        try:
-            out = subprocess.check_output(
-                ["pgrep", "-f", "Google Chrome for Testing"],
-                stderr=subprocess.DEVNULL,
-            )
-            pids = [int(x) for x in out.split() if x]
-        except subprocess.CalledProcessError:
-            return 0
-        killed = 0
-        for pid in pids:
-            try:
-                cmd = subprocess.check_output(
-                    ["ps", "-o", "command=", "-p", str(pid)],
-                    stderr=subprocess.DEVNULL,
-                ).decode("utf-8", "ignore")
-            except subprocess.CalledProcessError:
-                continue
-            if DOUYIN_PROFILE not in cmd:
-                continue
-            try:
-                os.kill(pid, signal.SIGTERM)
-                killed += 1
-                logger.warning("killed stale profile chrome pid=%d", pid)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                logger.warning("no permission to kill chrome pid=%d", pid)
-        if killed:
-            try:
-                os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG)
-            except ChildProcessError:
-                pass
-        return killed
-
-    async def _launch_with_retry(self, p, headless, retries=1):
-        # launch_persistent_context 失败 (TargetClosedError/profile 占用) 时
-        # 清残留 chrome 后重试一次, 保证后台 cron 不被前台 profile 锁阻断.
-        last_err = None
-        for attempt in range(retries + 1):
-            self._kill_stale_profile_chrome()
-            try:
-                ctx = await p.chromium.launch_persistent_context(
-                    DOUYIN_PROFILE, headless=headless
-                )
-                if attempt > 0:
-                    logger.info("launch succeeded on retry %d", attempt)
-                return ctx
-            except Exception as e:
-                last_err = e
-                msg = str(e)
-                if attempt < retries and ("TargetClosedError" in type(e).__name__ or "closed" in msg.lower()):
-                    logger.warning("launch failed (attempt %d): %s, retry after cleanup", attempt + 1, msg[:80])
-                    await asyncio.sleep(2)
-                    continue
-                raise
-        raise last_err
-
-    @staticmethod
-    def _parse_bool(val, default=False):
-        if isinstance(val, bool):
-            return val
-        if val is None:
-            return default
-        s = str(val).strip().lower()
-        if s in ("true", "1", "yes", "y", "on"):
-            return True
-        if s in ("false", "0", "no", "n", "off", ""):
-            return False
-        return default
+        finally:
+            # 审计 P1-14: 任何路径 (含异常) 必关 ctx 释放 profile 锁, 否则下轮 launch 永报 TargetClosedError.
+            if ctx is not None:
+                try:
+                    await ctx.close()
+                except Exception as e:
+                    logger.warning("ctx.close fallback failed: %s", e)
 
     async def _publish(self, page, video_path, description, title, dry_run, before_count, pre_vids=None):
         logger.info("[1/10] open upload page")
@@ -240,18 +176,18 @@ class DouyinPublishTool(BaseTool):
         return {"ok": ok, "vid": vid}
 
     async def _fill_description(self, page, text):
+        # 审计 P3-18: document.execCommand 已废弃, 部分新版 chrome 不响应 insertText ->
+        # 描述框填入失败静默. 改直接设 textContent + 触发 InputEvent (抖音描述框非 DraftJS,
+        # contenteditable, textContent 生效), execCommand selectAll/insertText 仅作兜底.
         await page.evaluate(
             f"""(() => {{
             const ed = document.querySelector('{SEL_DESC_EDITOR}') ||
                        document.querySelector('[contenteditable="true"]');
             if (!ed) return 'editor not found';
             ed.focus();
-            ed.innerHTML = '';
-            ed.textContent = '';
-            document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, {text!r});
-            ed.dispatchEvent(new InputEvent('input', {{bubbles: true, data: ed.textContent}}));
-            return 'filled';
+            ed.textContent = {text!r};
+            ed.dispatchEvent(new InputEvent('input', {{bubbles: true, data: ed.textContent, inputType: 'insertText'}}));
+            return ed.textContent === {text!r} ? 'filled' : 'partial:' + ed.textContent.length;
         }})()"""
         )
 
@@ -295,7 +231,9 @@ class DouyinPublishTool(BaseTool):
         )
 
     async def _wait_text(self, page, text, timeout=180):
-        loop = asyncio.get_event_loop()
+        # 审计 0906 P3-3: get_event_loop 弃用 (3.12 DeprecationWarning, 3.14 无运行循环报错).
+        # async 工具内必有运行循环, 用 get_running_loop.
+        loop = asyncio.get_running_loop()
         end = loop.time() + timeout
         while loop.time() < end:
             if text in await page.inner_text("body"):
@@ -318,16 +256,28 @@ class DouyinPublishTool(BaseTool):
         logging.info("click_publish result=%s", res)
         return res
 
-    async def _handle_confirm(self, page, timeout=15):
-        loop = asyncio.get_event_loop()
+    async def _handle_confirm(self, page, timeout=30):
+        # 审计 P3-14: 旧 15s 窗口太短, 离开/暂存弹窗晚弹 (>15s) 漏判 -> 误判发布成功.
+        # 提升到 30s, 且一旦检测到离开页面 (发布成功通常跳转 manage 页) 即提前 return True.
+        loop = asyncio.get_running_loop()
         end = loop.time() + timeout
         while loop.time() < end:
-            body = await page.inner_text("body")
+            try:
+                body = await page.inner_text("body")
+            except Exception:
+                body = ""
             if "离开" in body or "暂存" in body:
                 logging.error("publish aborted: leave/stash dialog appeared (wrong button clicked)")
                 return False
+            # 发布成功跳 manage/列表页, "发布成功" 文案或离开上传页即确认.
+            if "发布成功" in body or "creator.douyin.com/creator-matter" in page.url:
+                return True
             await asyncio.sleep(1)
-        return True
+        # 审计 0906 P3-2: 超时=未确认=应判失败. 旧 return True 让上游误以为发布已确认
+        # -> gate_ok -> archive 进 published -> 未真正发布的视频被误归档 -> stats 抓不到
+        # -> 进化数据漏条. 语义反了, 改 return False (留 pending 重试).
+        logging.warning("handle_confirm timed out %ds -> unconfirmed -> fail", timeout)
+        return False
 
     async def _get_work_count(self, page):
         try:
@@ -349,7 +299,7 @@ class DouyinPublishTool(BaseTool):
             # count 未知 = 无法验证 = 判失败, 留 pending 重试 (调用方 _publish 走 vid 回退兜底).
             logger.warning("before_count unknown, count-verify impossible -> fail")
             return False
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         end = loop.time() + timeout
         last = -1
         while loop.time() < end:

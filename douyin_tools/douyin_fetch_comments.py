@@ -1,10 +1,12 @@
 import asyncio
 import json
 import logging
+import re
 
 from tools.base import BaseTool
 
-from .config import DOUYIN_PROFILE, DOUYIN_COMMENT_URL
+from .config import DOUYIN_COMMENT_URL
+from .playwright_profile import profile_lock, launch_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +41,20 @@ class DouyinFetchCommentsTool(BaseTool):
             logger.error("playwright not installed")
             return json.dumps({"error": "playwright not installed"})
         try:
-            async with async_playwright() as p:
-                ctx = await p.chromium.launch_persistent_context(
-                    DOUYIN_PROFILE, headless=headless
-                )
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                comments = await self._fetch(page, aweme_title, limit)
-                await ctx.close()
+            with profile_lock():
+                async with async_playwright() as p:
+                    ctx = await launch_with_retry(p, headless)
+                    # 审计 P3-16: 旧 _fetch 内 session 过期 return [] 后直接 await ctx.close,
+                    # 但 _fetch 抛异常 (非 session 过期) 会跳过 ctx.close -> profile 锁泄漏.
+                    # 改 try-finally 统一保证 close.
+                    try:
+                        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                        comments = await self._fetch(page, aweme_title, limit)
+                    finally:
+                        try:
+                            await ctx.close()
+                        except Exception as e:
+                            logger.warning("fetch_comments ctx.close failed: %s", e)
             has_new = len(comments) > 0
             logger.info("douyin_fetch_comments done count=%d has_new=%s", len(comments), has_new)
             return json.dumps(
@@ -173,9 +182,18 @@ class DouyinFetchCommentsTool(BaseTool):
         seen_ids = set()
         for r in raw:
             text = r.get("text", "")
-            if not text or any(s in text for s in ["共", "个作品", "选择作品", "高清发布"]):
+            # 审计 P3-17: 旧 "共" in text 误杀含"共"字的合法评论 (如"一共多少星球").
+            # 改精确匹配统计行模板 "共N个评论"/"共N个作品", 不拦单字.
+            if not text:
                 continue
-            cid = r.get("id", "") or (r.get("user", "") + "|" + text)
+            if any(s in text for s in ["个作品", "选择作品", "高清发布"]) or re.match(r"^共\d+个?(评论|作品|回复)", text):
+                continue
+            # 审计 P1-19: 旧 fallback id = user+|+text 丢弃时间戳, 同人同文不同时间评论被误判重复跳过.
+            # 保留 JS 侧已拼的 fallId (含 ts), 回退再补 ts 后缀.
+            cid = r.get("id", "")
+            if not cid:
+                ts_match = re.search(r"(昨天|刚刚|\d{1,2}:\d{2}|\d+分钟前|\d+天前)", text)
+                cid = r.get("user", "") + "|" + text + "|" + (ts_match.group(1) if ts_match else "")
             if cid in seen_ids:
                 continue
             seen_ids.add(cid)

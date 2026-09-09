@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class MlxTtsTool(BaseTool):
     name = "mlx_tts"
     description = "文本转语音：优先 fusion-mlx /v1/audio/speech，失败回退 edge-tts，返回音频路径 JSON"
+    roles = frozenset({"voicer"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "text": {"type": "string", "description": "要合成的文本"},
         "voice": {"type": "string", "description": "音色，默认 af_heart"},

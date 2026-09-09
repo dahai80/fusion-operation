@@ -27,6 +27,7 @@ safe=false 的情形：含政治/色情/暴力/广告引流/敏感词，或回�
 class MlxReplyDraftTool(BaseTool):
     name = "mlx_reply_draft"
     description = "用 fusion-mlx 批量生成评论回复草稿（规则优先 + LLM 兜底），含安全标记"
+    roles = frozenset({"analyst"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "comments_json": {"type": "string", "description": "评论列表 JSON 字符串 [{id,text,user}]"},
         "account_role": {"type": "string", "description": "账号人设，如 科普博主"},

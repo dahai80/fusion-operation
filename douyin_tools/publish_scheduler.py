@@ -38,6 +38,7 @@ PEAK_LABEL = {
 class PublishSchedulerTool(BaseTool):
     name = "publish_scheduler"
     description = "发布时段策略：检查当前是否在抖音活跃高峰(12-13/19-21)，输出 in_peak/next_window 供 Graph D 决定立即发或延后"
+    roles = frozenset({"publisher", "lead"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "now": {"type": "string", "description": "测试用指定时间 HH:MM，空则取当前时间"},
         "windows": {"type": "string", "description": "自定义高峰窗口，逗号分隔 HH-HH，空则用默认 12-13,19-21"},

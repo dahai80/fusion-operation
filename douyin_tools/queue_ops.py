@@ -22,6 +22,7 @@ NODE_ID = os.environ.get("DOUYIN_NODE_ID", "")
 class QueueOpsTool(BaseTool):
     name = "queue_ops"
     description = "视频库存队列操作：enqueue 入库待发 / dequeue 取一条待发(原子移入 in-flight) / archive 归档已发+失败回收 / count 统计库存。文件锁防并发竞态"
+    roles = frozenset({"publisher", "lead"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "action": {"type": "string", "description": "enqueue|dequeue|archive|requeue|count"},
         "video_path": {"type": "string", "description": "enqueue 时视频绝对路径"},

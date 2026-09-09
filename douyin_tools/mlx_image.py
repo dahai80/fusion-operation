@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class MlxImageTool(BaseTool):
     name = "mlx_image"
     description = "文生图：优先 fusion-mlx /v1/images/generate，失败回退静态图库，返回图片路径数组 JSON"
+    roles = frozenset({"imager"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "prompts": {"type": "string", "description": "提示词列表(JSON 数组或逗号分隔)"},
         "n": {"type": "integer", "description": "每个提示词生成张数，默认 1"},

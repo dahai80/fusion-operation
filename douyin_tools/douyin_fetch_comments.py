@@ -17,6 +17,7 @@ SEL_SIDE_SHEET = ".douyin-creator-interactive-sidesheet-body"
 class DouyinFetchCommentsTool(BaseTool):
     name = "douyin_fetch_comments"
     description = "从抖音评论管理页抓取最新评论列表（Playwright async，DOM 解析）"
+    roles = frozenset({"researcher"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "aweme_title": {"type": "string", "description": "作品标题关键词，空=取最近作品"},
         "limit": {"type": "integer", "description": "最多取几条评论，默认 5"},

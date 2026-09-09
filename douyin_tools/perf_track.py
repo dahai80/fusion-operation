@@ -36,6 +36,7 @@ STAGE_LONG = "long_tail"
 class PerfTrackTool(BaseTool):
     name = "perf_track"
     description = "视频表现追踪与排行：snapshot 抓取全量 stats 落盘 stats_history.jsonl（按 vid 累积多时间点快照+生命周期阶段+互动率）；rank 读历史按播放/互动率排序分类爆款/平庸/差片"
+    roles = frozenset({"analyst"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "action": {"type": "string", "description": "snapshot|rank"},
         "stats_json": {"type": "string", "description": "snapshot 时传入 douyin_stats 返回的 JSON，空则内部调用 douyin_stats"},

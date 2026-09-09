@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 class FfmpegComposeTool(BaseTool):
     name = "ffmpeg_compose"
     description = "图片+配音合成 9:16 视频：Ken Burns 微动效 + 字幕 + ffmpeg 拼接混音"
+    roles = frozenset({"publisher"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "image_paths": {"type": "string", "description": "图片路径列表(JSON 字符串或逗号分隔)"},
         "audio_path": {"type": "string", "description": "配音音频路径"},

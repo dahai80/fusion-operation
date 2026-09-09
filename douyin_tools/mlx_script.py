@@ -58,6 +58,7 @@ SYSTEM_PROMPT = """你是抖音科普吸粉脚本作家。按以下规则输出�
 class MlxScriptTool(BaseTool):
     name = "mlx_script"
     description = "用 fusion-mlx 生成抖音吸粉脚本 JSON（标题/旁白/分镜/结尾钩子），支持 hook_variant A/B/C 实验 + 注入 winning_hooks 回灌"
+    roles = frozenset({"writer"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "topic": {"type": "string", "description": "本期主题，如 太阳系边缘"},
         "series": {"type": "string", "description": "所属系列，如 宇宙奥秘"},

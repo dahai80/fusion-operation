@@ -26,6 +26,7 @@ class WebImageSearchTool(BaseTool):
 
     name = "web_image_search"
     description = "搜 NASA Image Library 真实天体图并下载，返回 image_paths JSON（comfyui_image 的真实图优先路径，搜不足 enough=false 触发回退）"
+    roles = frozenset({"researcher", "imager"})  # M3-1: role-based tool filtering (architecture §6.1)
     parameters = {
         "queries": {"type": "string", "description": "天体英文关键词列表(JSON 数组/逗号分隔/或 script_json 自动提取)"},
         "per_query": {"type": "integer", "description": "每个关键词取几张，默认 1"},

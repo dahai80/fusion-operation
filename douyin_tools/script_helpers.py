@@ -1,7 +1,24 @@
+import contextlib
+import fcntl
 import json
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def file_lock(path):
+    # 跨进程文件锁 (fcntl.flock LOCK_EX): 防 topic_gen 并发读 perf_analyze 半写状态 (审计 P2-10).
+    # 锁旁路文件 (path + ".lock"), 持锁期间做 RMW 或原子写, 退出自动释放. 进程崩溃内核自动释放.
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    lock_path = str(path) + ".lock"
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
 
 def parse_script(raw):

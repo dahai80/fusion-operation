@@ -145,6 +145,9 @@ QUEUE_DIR = os.environ.get(
     "DOUYIN_QUEUE_DIR",
     _cfg("paths", "queue_dir", "/Users/dahai/fusion/fusion-operation/out/queue"),
 )
+# lease TTL 单源 (审计 0908 F2 ④): queue_ops dequeue + ops_health stale-inflight 告警同源读.
+# default 1800 覆盖最坏发布耗时 (审计 P0-1); env DOUYIN_LEASE_TTL 可覆盖.
+LEASE_TTL = int(os.environ.get("DOUYIN_LEASE_TTL", "1800"))
 AGENT_STUDIO_SOCKET = os.environ.get(
     "FUSION_STUDIO_SOCKET",
     _cfg("agent_studio", "socket", "/tmp/fusion-studio.sock"),

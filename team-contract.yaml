@@ -1,0 +1,65 @@
+# 抖音运营团队契约 v1 (douyin-ops)
+# §6.3 文档即契约: GUI 可渲染的结构化文件, Lead 规划轮强制读取.
+# agent 行为边界写在文档里, 文档在 GUI 里可改可审 (修改走 change gate).
+
+team: douyin-ops
+version: 1
+vertical: douyin
+
+roles:
+  - name: lead
+    tools: [queue_ops, publish_scheduler, ops_health, pattern_review, team_contract]
+    duty: 拆解/分配/仲裁/升级; 周计划起草; 读取本契约
+  - name: researcher
+    tools: [topic_gen, web_image_search, douyin_fetch_comments]
+    duty: 选题/素材/评论抓取
+  - name: writer
+    tools: [mlx_script]
+    duty: 脚本生成
+  - name: imager
+    tools: [comfyui_image, mlx_image, web_image_search]
+    duty: 封面/配图
+  - name: voicer
+    tools: [comfyui_tts, mlx_tts]
+    duty: 配音
+  - name: publisher
+    tools: [douyin_publish, douyin_reply, ffmpeg_compose, queue_ops, publish_scheduler]
+    duty: 发布/回复/合成
+  - name: analyst
+    tools: [douyin_stats, perf_track, perf_analyze, self_repair, ops_report, mlx_reply_draft, douyin_reply, ops_health, pattern_review]
+    duty: 数据/归因/修复/日报
+
+resources:
+  browser: {exclusive: true, count: 1, note: playwright profile 全局 flock 串行}
+  gpu: {slots: 1, note: mlx/comfyui 共享, Lead 按优先级排槽}
+  priorities: [publish, comment, restock, analyze]
+
+sla:
+  publish: {deadline_min: 20, alert_on_miss: true}
+  comment: {deadline_hours: 4}
+  resource_wait: {timeout_min: 30, action: lead_degrade}
+
+data_contract:
+  stats_split: stats_real/stats_estimated 物理分表
+  estimated_ratio_threshold: 0.2
+  winning_patterns_review: required
+  queue_store: out/queue/queue.db (SQLite, DB 权威, 文件目录投影)
+
+idempotency:
+  publish_key: slot+video_hash
+  rule: 有 published 证据永不重发
+
+interventions:
+  - weekly_plan_approve
+  - winning_patterns_review
+  - needs_fix_escalation: {consecutive: 2, action: human_takeover}
+  - deploy_drain_confirm
+  - break_in_channel
+
+exit_criteria:
+  publish_fail_rate_3d_gt_50pct: team_suspend_and_human_takeover
+
+weekly_plan:
+  cadence: weekly
+  flow: lead_draft → human_approve → execute
+  unapproved_not_executable: true

@@ -15,7 +15,7 @@ ALL_ROLES = frozenset({
 })
 
 ROLE_TOOLS: dict[str, frozenset[str]] = {
-    LEAD: frozenset({"queue_ops", "publish_scheduler", "ops_health", "pattern_review"}),
+    LEAD: frozenset({"queue_ops", "publish_scheduler", "ops_health", "pattern_review", "team_contract"}),
     RESEARCHER: frozenset({"topic_gen", "web_image_search", "douyin_fetch_comments"}),
     WRITER: frozenset({"mlx_script"}),
     IMAGER: frozenset({"comfyui_image", "mlx_image", "web_image_search"}),

@@ -23,7 +23,7 @@ def _discover_tool_classes():
 
 def test_all_tools_have_roles():
     classes = _discover_tool_classes()
-    assert len(classes) == 20, f"expected 20 tool classes, got {len(classes)}"
+    assert len(classes) == 21, f"expected 21 tool classes, got {len(classes)}"
     missing = [c.__name__ for c in classes if not hasattr(c, "roles") or not c.roles]
     assert not missing, f"tools without roles: {missing}"
 
@@ -71,7 +71,7 @@ def test_publisher_cannot_analyze():
 
 def test_lead_has_planning_visibility_only():
     lead_tools = ROLE_TOOLS[LEAD]
-    assert lead_tools == frozenset({"queue_ops", "publish_scheduler", "ops_health"}), (
+    assert lead_tools == frozenset({"queue_ops", "publish_scheduler", "ops_health", "pattern_review"}), (
         f"LEAD tools drifted: {lead_tools}"
     )
 

@@ -40,13 +40,14 @@ _OPS_TOOLS = [
     "self_repair",
     "publish_scheduler",
     "pattern_review",
+    "team_contract",
 ]
 _QUEUE_TOOLS = ["queue_ops", "topic_gen"]
 
 
 def test_registry_has_core_tools():
     r = create_douyin_registry()
-    assert r.count == 21
+    assert r.count == 22
     for name in _CORE_TOOLS + _OPS_TOOLS + _QUEUE_TOOLS + ["web_image_search"]:
         assert r.has(name), f"missing {name}"
 
@@ -3009,3 +3010,187 @@ async def test_b1_run_queue_publish_requeued_stops():
     # requeued 应立即停止, 只调用 1 次 (不重试同条耗配额).
     assert call_count["n"] == 1, f"requeued 应停止, 实际调用 {call_count['n']} 次"
     assert rc == 0
+
+
+# ============================================================
+# M3-6: team-contract.yaml + Lead 规划轮 + 周计划 approve
+# ============================================================
+
+def test_team_contract_read_returns_contract(tmp_path, monkeypatch):
+    # Lead 规划轮强制 read: 返回 team-contract.yaml 内容
+    from douyin_tools.team_contract import TeamContractTool, load_contract
+    import yaml
+    contract = {
+        "team": "douyin-ops", "version": 1,
+        "roles": [{"name": "lead", "tools": ["queue_ops"], "duty": "x"}],
+        "resources": {}, "sla": {}, "data_contract": {},
+        "idempotency": {}, "interventions": [], "exit_criteria": {},
+    }
+    p = tmp_path / "tc.yaml"
+    p.write_text(yaml.safe_dump(contract), encoding="utf-8")
+    monkeypatch.setattr("douyin_tools.team_contract.CONTRACT_FILE", str(p))
+    tool = TeamContractTool()
+    out = json.loads(tool._read())
+    assert out["status"] == "ok"
+    assert out["contract"]["team"] == "douyin-ops"
+
+
+def test_team_contract_read_missing_returns_error(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    monkeypatch.setattr("douyin_tools.team_contract.CONTRACT_FILE", str(tmp_path / "nope.yaml"))
+    tool = TeamContractTool()
+    out = json.loads(tool._read())
+    assert out["error"]
+
+
+def test_team_contract_validate_ok(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    import yaml
+    contract = {
+        "team": "douyin-ops", "version": 1,
+        "roles": [{"name": "lead", "tools": ["queue_ops"], "duty": "x"}],
+        "resources": {}, "sla": {}, "data_contract": {},
+        "idempotency": {}, "interventions": [], "exit_criteria": {},
+    }
+    p = tmp_path / "tc.yaml"
+    p.write_text(yaml.safe_dump(contract), encoding="utf-8")
+    monkeypatch.setattr("douyin_tools.team_contract.CONTRACT_FILE", str(p))
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    out = json.loads(tool._validate())
+    assert out["valid"] is True
+    assert out["team"] == "douyin-ops"
+
+
+def test_team_contract_validate_missing_keys(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    import yaml
+    contract = {"team": "douyin-ops", "version": 1}  # missing roles/resources/sla/etc
+    p = tmp_path / "tc.yaml"
+    p.write_text(yaml.safe_dump(contract), encoding="utf-8")
+    monkeypatch.setattr("douyin_tools.team_contract.CONTRACT_FILE", str(p))
+    tool = TeamContractTool()
+    out = json.loads(tool._validate())
+    assert out["valid"] is False
+    assert any("roles" in e for e in out["errors"])
+
+
+def test_team_contract_validate_role_missing_duty(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    import yaml
+    contract = {
+        "team": "douyin-ops", "version": 1,
+        "roles": [{"name": "lead", "tools": ["queue_ops"]}],  # missing duty
+        "resources": {}, "sla": {}, "data_contract": {},
+        "idempotency": {}, "interventions": [], "exit_criteria": {},
+    }
+    p = tmp_path / "tc.yaml"
+    p.write_text(yaml.safe_dump(contract), encoding="utf-8")
+    monkeypatch.setattr("douyin_tools.team_contract.CONTRACT_FILE", str(p))
+    tool = TeamContractTool()
+    out = json.loads(tool._validate())
+    assert out["valid"] is False
+    assert any("duty" in e for e in out["errors"])
+
+
+async def test_team_contract_plan_draft_creates_pending(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool, _load_plan
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    out = json.loads(await tool.execute(action="plan_draft", plan_summary="本周发5条补货视频"))
+    assert out["status"] == "drafted"
+    assert out["plan_status"] == "pending_approval"
+    plan = _load_plan(out["plan_id"])
+    assert plan["summary"] == "本周发5条补货视频"
+    assert plan["status"] == "pending_approval"
+    assert plan["approved_at"] is None
+
+
+async def test_team_contract_plan_draft_requires_summary(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    out = json.loads(await tool.execute(action="plan_draft", plan_summary=""))
+    assert out["error"]
+
+
+async def test_team_contract_plan_approve_flow(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool, _load_plan
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    drafted = json.loads(await tool.execute(action="plan_draft", plan_summary="周计划A"))
+    plan_id = drafted["plan_id"]
+    # approved
+    out = json.loads(await tool.execute(action="plan_approve", plan_id=plan_id))
+    assert out["status"] == "approved"
+    plan = _load_plan(plan_id)
+    assert plan["status"] == "approved"
+    assert plan["approved_at"] is not None
+
+
+async def test_team_contract_plan_approve_wrong_status(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    drafted = json.loads(await tool.execute(action="plan_draft", plan_summary="周计划B"))
+    plan_id = drafted["plan_id"]
+    # approve once
+    await tool.execute(action="plan_approve", plan_id=plan_id)
+    # second approve → reject (not pending)
+    out = json.loads(await tool.execute(action="plan_approve", plan_id=plan_id))
+    assert out["error"]
+
+
+async def test_team_contract_plan_reject_flow(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool, _load_plan
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    drafted = json.loads(await tool.execute(action="plan_draft", plan_summary="周计划C"))
+    plan_id = drafted["plan_id"]
+    out = json.loads(await tool.execute(action="plan_reject", plan_id=plan_id, comment="预算不足"))
+    assert out["status"] == "rejected"
+    assert out["comment"] == "预算不足"
+    plan = _load_plan(plan_id)
+    assert plan["status"] == "rejected"
+    assert plan["rejected_at"] is not None
+
+
+async def test_team_contract_plan_list(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    await tool.execute(action="plan_draft", plan_summary="计划1")
+    await tool.execute(action="plan_draft", plan_summary="计划2")
+    out = json.loads(await tool.execute(action="plan_list"))
+    assert out["status"] == "ok"
+    assert out["count"] == 2
+
+
+async def test_team_contract_plan_approve_not_found(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    out = json.loads(await tool.execute(action="plan_approve", plan_id="nonexistent"))
+    assert out["error"] == "plan not found"
+
+
+async def test_team_contract_unknown_action(tmp_path, monkeypatch):
+    from douyin_tools.team_contract import TeamContractTool
+    monkeypatch.setattr("douyin_tools.team_contract.PLAN_DIR", str(tmp_path / "plans"))
+    tool = TeamContractTool()
+    out = json.loads(await tool.execute(action="bogus"))
+    assert out["error"]
+
+
+def test_team_contract_load_contract_file_not_found(tmp_path):
+    from douyin_tools.team_contract import load_contract
+    data = load_contract(str(tmp_path / "missing.yaml"))
+    assert data == {}
+
+
+def test_team_contract_repo_contract_valid():
+    # 仓内 team-contract.yaml 必须自洽: validate 通过
+    from douyin_tools.team_contract import validate_contract
+    result = validate_contract()
+    assert result["valid"] is True, f"repo team-contract.yaml invalid: {result['errors']}"
+    assert result["team"] == "douyin-ops"

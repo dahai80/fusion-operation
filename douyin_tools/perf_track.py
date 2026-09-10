@@ -66,8 +66,16 @@ class PerfTrackTool(BaseTool):
             return json.dumps({"error": "empty stats"})
         items = stats.get("items", []) or []
         snap_at = stats.get("fetched_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        os.makedirs(OPS_DATA_DIR, exist_ok=True)
+        real_path = history_store.HISTORY_FILE
+        est_path = history_store.ESTIMATED_FILE
+        # M3-4 数据门禁 §5.6: estimated 行物理隔离到 ESTIMATED_FILE, 不与真实数据同行同表.
+        # 旧实现单文件写 + 无 estimated 标志 -> perf_analyze 排除逻辑永不触发 (M0 止血漏网).
         written = 0
-        with open(history_store.HISTORY_FILE, "a", encoding="utf-8") as f:
+        real_count = 0
+        est_count = 0
+        with open(real_path, "a", encoding="utf-8") as fr, \
+             open(est_path, "a", encoding="utf-8") as fe:
             for it in items:
                 vid = it.get("vid", "")
                 if not vid:
@@ -78,6 +86,7 @@ class PerfTrackTool(BaseTool):
                 shares = it.get("shares", 0) or 0
                 age_hours = self._age_hours(it.get("create_time", 0), snap_at)
                 inter = round((likes + comments + shares) / max(plays, 1), 4)
+                estimated = it.get("plays_source") == "estimated"
                 row = {
                     "vid": vid,
                     "title": (it.get("title", "") or "")[:60],
@@ -90,20 +99,87 @@ class PerfTrackTool(BaseTool):
                     "snapshot_at": snap_at,
                     "age_hours": age_hours,
                     "stage": self._stage(age_hours),
+                    "estimated": estimated,
                 }
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                line = json.dumps(row, ensure_ascii=False) + "\n"
+                if estimated:
+                    fe.write(line)
+                    est_count += 1
+                else:
+                    fr.write(line)
+                    real_count += 1
                 written += 1
         rank = self._rank_top(items)
         backfilled = self._backfill_published_vid(items)
         cfg = _perf_cfg()
         cap = int(cfg.get("max_history_per_vid", MAX_HISTORY_PER_VID))
         threshold = int(cfg.get("prune_threshold", cap * 200))
-        pruned = prune_history(cap, threshold)
-        logger.info("snapshot done written=%d snap_at=%s vid_backfill=%d pruned=%d", written, snap_at, backfilled, pruned)
+        pruned_real = prune_history(cap, threshold, path=real_path)
+        pruned_est = prune_history(cap, threshold, path=est_path)
+        pruned = pruned_real + pruned_est
+        # M3-4 §5.6 + §6.2 line 378: estimated 占比超阈值 -> team.alert (API 播放采集失效提示).
+        ratio, alerted, alert_threshold = self._check_estimated_ratio(real_count, est_count, snap_at)
+        logger.info(
+            "snapshot done written=%d real=%d est=%d ratio=%.3f alerted=%s snap_at=%s vid_backfill=%d pruned=%d",
+            written, real_count, est_count, ratio, alerted, snap_at, backfilled, pruned,
+        )
         return json.dumps(
-            {"status": "snapshotted", "written": written, "snapshot_at": snap_at, "top": rank, "vid_backfill": backfilled, "pruned": pruned},
+            {
+                "status": "snapshotted",
+                "written": written,
+                "real_count": real_count,
+                "estimated_count": est_count,
+                "estimated_ratio": ratio,
+                "estimated_threshold": alert_threshold,
+                "alerted": "true" if alerted else "false",
+                "snapshot_at": snap_at,
+                "top": rank,
+                "vid_backfill": backfilled,
+                "pruned": pruned,
+            },
             ensure_ascii=False,
         )
+
+    def _check_estimated_ratio(self, real_count, est_count, snap_at):
+        # M3-4 数据门禁: estimated/(real+est) > 阈值 -> 告警. 阈值读 data_gate config (默认 0.2).
+        rcfg = get_json_config().get("data_gate", {})
+        try:
+            threshold = float(rcfg.get("estimated_ratio_threshold", 0.2))
+        except (TypeError, ValueError):
+            threshold = 0.2
+        total = real_count + est_count
+        ratio = round(est_count / total, 4) if total else 0.0
+        if ratio <= threshold:
+            return ratio, False, threshold
+        alert = {
+            "type": "data_gate",
+            "alert": "estimated_ratio_exceeded",
+            "ratio": ratio,
+            "threshold": threshold,
+            "estimated_count": est_count,
+            "real_count": real_count,
+            "total": total,
+            "snapshot_at": snap_at,
+            "severity": "warning",
+            "message": "API 播放量采集失效, estimated 占比 %.0f%% 超阈值 %.0f%%" % (ratio * 100, threshold * 100),
+        }
+        history_store.append_alert(alert)
+        self._notify_daemon_alert(alert)
+        return ratio, True, threshold
+
+    @staticmethod
+    def _notify_daemon_alert(alert):
+        # best-effort daemon team.alert RPC (尚不存在则降级文件告警, 复用 ops_health:185 模式).
+        try:
+            import asyncio
+            from .config import AGENT_STUDIO_SOCKET
+            from agent_runtime.sdk.client import AgentClient
+            client = AgentClient(socket_path=AGENT_STUDIO_SOCKET)
+            asyncio.wait_for(client.call("team.alert", alert), timeout=5)
+            logger.info("data_gate alert sent via daemon RPC")
+        except Exception as exc:
+            logger.debug("data_gate daemon RPC skipped (file alert primary): %s", type(exc).__name__)
+
 
     @staticmethod
     def _backfill_published_vid(items):

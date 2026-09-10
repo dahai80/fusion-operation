@@ -81,6 +81,10 @@
     "cold_plays_max": 50,
     "max_history_per_vid": 40
   },
+  "data_gate": {
+    "estimated_ratio_threshold": 0.2,
+    "pending_stale_hours": 48
+  },
   "video": {
     "fps": 24,
     "width": 1080,

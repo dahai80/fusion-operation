@@ -15,13 +15,13 @@ ALL_ROLES = frozenset({
 })
 
 ROLE_TOOLS: dict[str, frozenset[str]] = {
-    LEAD: frozenset({"queue_ops", "publish_scheduler", "ops_health"}),
+    LEAD: frozenset({"queue_ops", "publish_scheduler", "ops_health", "pattern_review"}),
     RESEARCHER: frozenset({"topic_gen", "web_image_search", "douyin_fetch_comments"}),
     WRITER: frozenset({"mlx_script"}),
     IMAGER: frozenset({"comfyui_image", "mlx_image", "web_image_search"}),
     VOICER: frozenset({"comfyui_tts", "mlx_tts"}),
     PUBLISHER: frozenset({"douyin_publish", "douyin_reply", "ffmpeg_compose", "queue_ops", "publish_scheduler"}),
-    ANALYST: frozenset({"douyin_stats", "perf_track", "perf_analyze", "self_repair", "ops_report", "mlx_reply_draft", "douyin_reply", "ops_health"}),
+    ANALYST: frozenset({"douyin_stats", "perf_track", "perf_analyze", "self_repair", "ops_report", "mlx_reply_draft", "douyin_reply", "ops_health", "pattern_review"}),
 }
 
 logger.info("roles loaded: %d roles, %d unique tools", len(ALL_ROLES), len(set().union(*ROLE_TOOLS.values())))

@@ -15,6 +15,8 @@ INFLIGHT_DIR = os.path.join(QUEUE_DIR, "inflight")
 PUBLISHED_DIR = os.path.join(QUEUE_DIR, "published")
 FAILED_DIR = os.path.join(QUEUE_DIR, "failed")
 PATTERNS_FILE = os.path.join(OPS_DATA_DIR, "winning_patterns.json")
+# M3-4 数据门禁: pending_patterns.json 提案待评审 (perf_analyze 写, pattern_review promote 转正).
+PENDING_PATTERNS_FILE = os.path.join(OPS_DATA_DIR, "pending_patterns.json")
 BLACKLIST_FILE = os.path.join(OPS_DATA_DIR, "topic_blacklist.json")
 REPLIED_FILE = os.path.join(OPS_DATA_DIR, "replied.json")
 HISTORY_FILE = os.path.join(OPS_DATA_DIR, "stats_history.jsonl")
@@ -23,6 +25,8 @@ HISTORY_FILE = os.path.join(OPS_DATA_DIR, "stats_history.jsonl")
 CRON_FAIL_RATE_THRESHOLD = 0.30
 EVOLVE_STALE_HOURS = 30
 REPLIED_STALE_HOURS = 48
+# M3-4: pending 提案超过 N 小时未评审告警 (默认 48h, 可 config data_gate.pending_stale_hours 覆盖).
+PENDING_STALE_HOURS_DEFAULT = 48
 LOW_PENDING_THRESHOLD = 3
 # lease TTL: 从 config 单源导入 (审计 0908 F2 ④ stale-inflight 告警阈值 = 2×LEASE_TTL).
 # queue_ops.dequeue + ops_health 共用同一 LEASE_TTL, env DOUYIN_LEASE_TTL 可覆盖, default 1800.
@@ -152,6 +156,7 @@ class OpsHealthTool(BaseTool):
         out = {}
         for name, path in (
             ("winning_patterns", PATTERNS_FILE),
+            ("pending_patterns", PENDING_PATTERNS_FILE),
             ("topic_blacklist", BLACKLIST_FILE),
             ("replied", REPLIED_FILE),
             ("stats_history", HISTORY_FILE),
@@ -179,6 +184,18 @@ class OpsHealthTool(BaseTool):
         bl = files.get("topic_blacklist", {})
         if not bl.get("exists"):
             out.append("self_repair_never_run: topic_blacklist.json 不存在, 差片自我修复从未落盘")
+        # M3-4 数据门禁: pending_patterns 提案健康检查.
+        try:
+            pending_stale = int(get_json_config().get("data_gate", {}).get("pending_stale_hours", PENDING_STALE_HOURS_DEFAULT))
+        except (TypeError, ValueError):
+            pending_stale = PENDING_STALE_HOURS_DEFAULT
+        pending = files.get("pending_patterns", {})
+        winning = files.get("winning_patterns", {})
+        if pending.get("exists"):
+            if now - pending["mtime"] > pending_stale * 3600:
+                out.append(f"pending_patterns_stale: 提案超过 {pending_stale}h 未评审, 进化闭环卡在评审门")
+            if not winning.get("exists"):
+                out.append("winning_patterns_never_promoted: winning_patterns.json 不存在但 pending 存在, 待 promote 转正")
         return out
 
     async def _cron_health(self, days):

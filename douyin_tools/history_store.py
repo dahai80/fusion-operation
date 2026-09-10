@@ -8,11 +8,16 @@ from .config import OPS_DATA_DIR
 logger = logging.getLogger(__name__)
 
 HISTORY_FILE = os.path.join(OPS_DATA_DIR, "stats_history.jsonl")
+# M3-4 数据门禁 §5.6: estimated 行物理隔离到独立文件, 永不与真实数据同行同表.
+# perf_track._snapshot 据 plays_source=estimated 分流写入. perf_analyze 只读 HISTORY_FILE.
+ESTIMATED_FILE = os.path.join(OPS_DATA_DIR, "stats_estimated.jsonl")
+ALERTS_FILE = os.path.join(OPS_DATA_DIR, "team_alerts.jsonl")
 
 _MAX_HISTORY_PER_VID_DEFAULT = 40
 
 
 def load_history(path=None):
+    # 默认读 real 行 (stats_history.jsonl). estimated 行在 ESTIMATED_FILE, 物理隔离.
     rows = []
     p = path or HISTORY_FILE
     try:
@@ -104,3 +109,23 @@ def prune_history(max_per_vid=_MAX_HISTORY_PER_VID_DEFAULT, prune_threshold=None
     dropped = len(rows) - len(kept)
     logger.info("prune_history rows=%d kept=%d dropped=%d per_vid_cap=%d", len(rows), len(kept), dropped, cap)
     return dropped
+
+
+def load_estimated(path=None):
+    # M3-4: 读 estimated 行 (stats_estimated.jsonl). 归因/排行不调此函数, 仅数据缺口监控用.
+    return load_history(path or ESTIMATED_FILE)
+
+
+def append_alert(alert, path=None):
+    # M3-4 数据门禁: 告警落 team_alerts.jsonl (append 模式, 每行一 JSON).
+    # 主路径 (daemon team.alert RPC 尚不存在, 见 ops_health:185 AgentClient 模式).
+    os.makedirs(OPS_DATA_DIR, exist_ok=True)
+    p = path or ALERTS_FILE
+    try:
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(alert, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        logger.warning("append_alert write failed path=%s err=%s", p, exc)
+        return False
+    logger.info("append_alert ok type=%s path=%s", alert.get("type"), p)
+    return True

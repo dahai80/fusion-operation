@@ -39,13 +39,14 @@ _OPS_TOOLS = [
     "perf_analyze",
     "self_repair",
     "publish_scheduler",
+    "pattern_review",
 ]
 _QUEUE_TOOLS = ["queue_ops", "topic_gen"]
 
 
 def test_registry_has_core_tools():
     r = create_douyin_registry()
-    assert r.count == 20
+    assert r.count == 21
     for name in _CORE_TOOLS + _OPS_TOOLS + _QUEUE_TOOLS + ["web_image_search"]:
         assert r.has(name), f"missing {name}"
 
@@ -2349,6 +2350,7 @@ async def test_perf_analyze_excludes_estimated_from_attribution(tmp_path, monkey
     hist.write_text("\n".join(rows))
     monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(amod, "PATTERNS_FILE", str(tmp_path / "patterns.json"), raising=False)
+    monkeypatch.setattr(amod, "PENDING_PATTERNS_FILE", str(tmp_path / "pending_patterns.json"), raising=False)
     monkeypatch.setattr(amod, "OPS_DATA_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(amod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
     t = PerfAnalyzeTool()
@@ -2361,12 +2363,268 @@ async def test_perf_analyze_excludes_estimated_from_attribution(tmp_path, monkey
     monkeypatch.setattr(PerfAnalyzeTool, "_call_model", fake_call_model)
     res = await t.execute(min_samples=3)
     d = json.loads(res)
-    assert d.get("status") == "ok" or "patterns_file" in d
+    # M3-4: perf_analyze 写 pending_patterns.json (提案), status=proposed, needs_review=true.
+    assert d.get("status") in ("ok", "proposed") or "patterns_file" in d or "pending_file" in d
+    assert d.get("needs_review") == "true"
     ev = captured["evidence"]
     # 真实标题进归因, estimated 标题不进归因 (F3 核心断言: estimated 不污染 cold 切片).
     assert "真爆款" in ev
     assert "假数据A" not in ev
     assert "假数据B" not in ev
+
+
+# ===== M3-4 数据门禁 tests =====
+
+
+async def test_snapshot_propagates_estimated_flag(tmp_path, monkeypatch):
+    # M3-4: perf_track._snapshot 据 plays_source=estimated 传播 row.estimated 标志.
+    # 旧实现 row dict 无 estimated 字段 -> perf_analyze 排除逻辑永不触发 (M0 止血漏网).
+    import douyin_tools.perf_track as pmod
+    from douyin_tools.perf_track import PerfTrackTool
+    from douyin_tools import history_store
+    hist = tmp_path / "stats_history.jsonl"
+    est = tmp_path / "stats_estimated.jsonl"
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "ESTIMATED_FILE", str(est))
+    monkeypatch.setattr(history_store, "ALERTS_FILE", str(tmp_path / "team_alerts.jsonl"))
+    monkeypatch.setattr(pmod, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(pmod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
+    items = [
+        {"vid": "v1", "plays": 100, "title": "real", "create_time": 0},
+        {"vid": "v2", "plays": 30, "plays_source": "estimated", "title": "est", "create_time": 0},
+    ]
+    stats = {"fetched_at": "2026-09-11 10:00:00", "items": items}
+    t = PerfTrackTool()
+    res = await t.execute(action="snapshot", stats_json=json.dumps(stats))
+    d = json.loads(res)
+    assert d["status"] == "snapshotted"
+    assert d["real_count"] == 1
+    assert d["estimated_count"] == 1
+    real_rows = [json.loads(l) for l in hist.read_text().strip().split("\n") if l]
+    est_rows = [json.loads(l) for l in est.read_text().strip().split("\n") if l]
+    assert real_rows[0]["estimated"] is False
+    assert est_rows[0]["estimated"] is True
+
+
+async def test_stats_real_estimated_physical_split(tmp_path, monkeypatch):
+    # M3-4 §5.6: estimated 行物理隔离到 ESTIMATED_FILE, 不与真实数据同行同表.
+    import douyin_tools.perf_track as pmod
+    from douyin_tools.perf_track import PerfTrackTool
+    from douyin_tools import history_store
+    hist = tmp_path / "stats_history.jsonl"
+    est = tmp_path / "stats_estimated.jsonl"
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "ESTIMATED_FILE", str(est))
+    monkeypatch.setattr(history_store, "ALERTS_FILE", str(tmp_path / "team_alerts.jsonl"))
+    monkeypatch.setattr(pmod, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(pmod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
+    items = [
+        {"vid": "r1", "plays": 100, "title": "r1", "create_time": 0},
+        {"vid": "r2", "plays": 200, "title": "r2", "create_time": 0},
+        {"vid": "r3", "plays": 50, "title": "r3", "create_time": 0},
+        {"vid": "r4", "plays": 80, "title": "r4", "create_time": 0},
+        {"vid": "r5", "plays": 10, "title": "r5", "create_time": 0},
+        {"vid": "e1", "plays": 0, "plays_source": "estimated", "title": "e1", "create_time": 0},
+        {"vid": "e2", "plays": 0, "plays_source": "estimated", "title": "e2", "create_time": 0},
+        {"vid": "e3", "plays": 0, "plays_source": "estimated", "title": "e3", "create_time": 0},
+    ]
+    stats = {"fetched_at": "2026-09-11 10:00:00", "items": items}
+    t = PerfTrackTool()
+    res = await t.execute(action="snapshot", stats_json=json.dumps(stats))
+    d = json.loads(res)
+    assert d["real_count"] == 5
+    assert d["estimated_count"] == 3
+    real_lines = [l for l in hist.read_text().strip().split("\n") if l]
+    est_lines = [l for l in est.read_text().strip().split("\n") if l]
+    assert len(real_lines) == 5
+    assert len(est_lines) == 3
+    real_vids = {json.loads(l)["vid"] for l in real_lines}
+    est_vids = {json.loads(l)["vid"] for l in est_lines}
+    assert real_vids == {"r1", "r2", "r3", "r4", "r5"}
+    assert est_vids == {"e1", "e2", "e3"}
+
+
+async def test_estimated_ratio_alert_triggers(tmp_path, monkeypatch):
+    # M3-4 §6.2 line 378: estimated 占比 > 20% 阈值 -> team.alert + result.alerted=true.
+    import douyin_tools.perf_track as pmod
+    from douyin_tools.perf_track import PerfTrackTool
+    from douyin_tools import history_store
+    hist = tmp_path / "stats_history.jsonl"
+    est = tmp_path / "stats_estimated.jsonl"
+    alerts = tmp_path / "team_alerts.jsonl"
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "ESTIMATED_FILE", str(est))
+    monkeypatch.setattr(history_store, "ALERTS_FILE", str(alerts))
+    monkeypatch.setattr(pmod, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(pmod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
+    items = [
+        {"vid": "r1", "plays": 100, "title": "r1", "create_time": 0},
+        {"vid": "r2", "plays": 200, "title": "r2", "create_time": 0},
+        {"vid": "r3", "plays": 50, "title": "r3", "create_time": 0},
+        {"vid": "e1", "plays": 0, "plays_source": "estimated", "title": "e1", "create_time": 0},
+        {"vid": "e2", "plays": 0, "plays_source": "estimated", "title": "e2", "create_time": 0},
+    ]
+    stats = {"fetched_at": "2026-09-11 10:00:00", "items": items}
+    t = PerfTrackTool()
+    res = await t.execute(action="snapshot", stats_json=json.dumps(stats))
+    d = json.loads(res)
+    # 2 est / 5 total = 0.4 > 0.2 threshold
+    assert d["estimated_ratio"] == 0.4
+    assert d["alerted"] == "true"
+    assert alerts.exists()
+    alert_line = alerts.read_text().strip().split("\n")[-1]
+    alert = json.loads(alert_line)
+    assert alert["alert"] == "estimated_ratio_exceeded"
+    assert alert["ratio"] == 0.4
+
+
+async def test_estimated_ratio_below_threshold_no_alert(tmp_path, monkeypatch):
+    # M3-4: ratio <= 阈值不告警.
+    import douyin_tools.perf_track as pmod
+    from douyin_tools.perf_track import PerfTrackTool
+    from douyin_tools import history_store
+    hist = tmp_path / "stats_history.jsonl"
+    est = tmp_path / "stats_estimated.jsonl"
+    alerts = tmp_path / "team_alerts.jsonl"
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "ESTIMATED_FILE", str(est))
+    monkeypatch.setattr(history_store, "ALERTS_FILE", str(alerts))
+    monkeypatch.setattr(pmod, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(pmod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
+    items = [
+        {"vid": "r1", "plays": 100, "title": "r1", "create_time": 0},
+        {"vid": "r2", "plays": 200, "title": "r2", "create_time": 0},
+        {"vid": "r3", "plays": 50, "title": "r3", "create_time": 0},
+        {"vid": "r4", "plays": 80, "title": "r4", "create_time": 0},
+        {"vid": "r5", "plays": 90, "title": "r5", "create_time": 0},
+        {"vid": "r6", "plays": 70, "title": "r6", "create_time": 0},
+        {"vid": "r7", "plays": 60, "title": "r7", "create_time": 0},
+        {"vid": "r8", "plays": 40, "title": "r8", "create_time": 0},
+        {"vid": "r9", "plays": 30, "title": "r9", "create_time": 0},
+        {"vid": "e1", "plays": 0, "plays_source": "estimated", "title": "e1", "create_time": 0},
+    ]
+    stats = {"fetched_at": "2026-09-11 10:00:00", "items": items}
+    t = PerfTrackTool()
+    res = await t.execute(action="snapshot", stats_json=json.dumps(stats))
+    d = json.loads(res)
+    # 1 est / 10 total = 0.1 <= 0.2
+    assert d["estimated_ratio"] == 0.1
+    assert d["alerted"] == "false"
+    assert not alerts.exists()
+
+
+async def test_perf_analyze_writes_pending_not_winning(tmp_path, monkeypatch):
+    # M3-4 §5.6: perf_analyze 写 pending_patterns.json (提案), winning_patterns.json 未动.
+    import douyin_tools.perf_analyze as amod
+    from douyin_tools.perf_analyze import PerfAnalyzeTool
+    from douyin_tools import history_store
+    hist = tmp_path / "stats_history.jsonl"
+    hist.write_text(json.dumps({"vid": "v1", "plays": 200, "title": "t", "snapshot_at": "2026-09-11 10:00:00"}) + "\n")
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
+    winning = tmp_path / "winning_patterns.json"
+    pending = tmp_path / "pending_patterns.json"
+    monkeypatch.setattr(amod, "PATTERNS_FILE", str(winning), raising=False)
+    monkeypatch.setattr(amod, "PENDING_PATTERNS_FILE", str(pending), raising=False)
+    monkeypatch.setattr(amod, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(amod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
+    async def fake_call_model(self, evidence, model):
+        return {"winning_topics": ["topicA"], "winning_hooks": ["hookA"], "losing_patterns": ["bad"], "title_formula": "f", "topic_gen_hint": "h"}
+    monkeypatch.setattr(PerfAnalyzeTool, "_call_model", fake_call_model)
+    t = PerfAnalyzeTool()
+    res = await t.execute(min_samples=1)
+    d = json.loads(res)
+    assert d["status"] == "proposed"
+    assert d["needs_review"] == "true"
+    assert pending.exists()
+    assert not winning.exists()
+    pdat = json.loads(pending.read_text())
+    assert pdat["winning_topics"] == ["topicA"]
+
+
+async def test_pattern_review_promote(tmp_path, monkeypatch):
+    # M3-4: pattern_review promote 转正 pending -> winning.
+    from douyin_tools import pattern_review as prev
+    from douyin_tools.pattern_review import PatternReviewTool
+    monkeypatch.setattr(prev, "WINNING_FILE", str(tmp_path / "winning_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "PENDING_FILE", str(tmp_path / "pending_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    pending = tmp_path / "pending_patterns.json"
+    winning = tmp_path / "winning_patterns.json"
+    pending.write_text(json.dumps({"winning_topics": ["X"], "winning_hooks": ["Y"]}))
+    t = PatternReviewTool()
+    res = await t.execute(action="promote")
+    d = json.loads(res)
+    assert d["status"] == "promoted"
+    assert winning.exists()
+    wdat = json.loads(winning.read_text())
+    assert wdat["winning_topics"] == ["X"]
+    assert not pending.exists()
+
+
+async def test_pattern_review_reject(tmp_path, monkeypatch):
+    # M3-4: pattern_review reject 删 pending, winning 未动.
+    from douyin_tools import pattern_review as prev
+    from douyin_tools.pattern_review import PatternReviewTool
+    monkeypatch.setattr(prev, "WINNING_FILE", str(tmp_path / "winning_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "PENDING_FILE", str(tmp_path / "pending_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    pending = tmp_path / "pending_patterns.json"
+    winning = tmp_path / "winning_patterns.json"
+    winning.write_text(json.dumps({"winning_topics": ["old"]}))
+    pending.write_text(json.dumps({"winning_topics": ["new"]}))
+    t = PatternReviewTool()
+    res = await t.execute(action="reject")
+    d = json.loads(res)
+    assert d["status"] == "rejected"
+    assert not pending.exists()
+    assert winning.exists()
+    wdat = json.loads(winning.read_text())
+    assert wdat["winning_topics"] == ["old"]
+
+
+async def test_pattern_review_list(tmp_path, monkeypatch):
+    # M3-4: pattern_review list 返回 pending + winning 两者.
+    from douyin_tools import pattern_review as prev
+    from douyin_tools.pattern_review import PatternReviewTool
+    monkeypatch.setattr(prev, "WINNING_FILE", str(tmp_path / "winning_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "PENDING_FILE", str(tmp_path / "pending_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    (tmp_path / "winning_patterns.json").write_text(json.dumps({"winning_topics": ["W"]}))
+    (tmp_path / "pending_patterns.json").write_text(json.dumps({"winning_topics": ["P"]}))
+    t = PatternReviewTool()
+    res = await t.execute(action="list")
+    d = json.loads(res)
+    assert d["status"] == "listed"
+    assert d["has_pending"] == "true"
+    assert d["has_winning"] == "true"
+    assert d["pending"]["winning_topics"] == ["P"]
+    assert d["winning"]["winning_topics"] == ["W"]
+
+
+async def test_pattern_review_promote_no_pending(tmp_path, monkeypatch):
+    # M3-4: promote 无 pending -> error.
+    from douyin_tools import pattern_review as prev
+    from douyin_tools.pattern_review import PatternReviewTool
+    monkeypatch.setattr(prev, "WINNING_FILE", str(tmp_path / "winning_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "PENDING_FILE", str(tmp_path / "pending_patterns.json"), raising=False)
+    monkeypatch.setattr(prev, "OPS_DATA_DIR", str(tmp_path), raising=False)
+    t = PatternReviewTool()
+    res = await t.execute(action="promote")
+    d = json.loads(res)
+    assert "error" in d
+
+
+def test_consumers_still_read_winning(tmp_path, monkeypatch):
+    # M3-4 regression: 消费者 (topic_gen) 读 winning_patterns.json, 不读 pending_patterns.json.
+    from douyin_tools import topic_gen as tmod
+    from douyin_tools.topic_gen import TopicGenTool
+    winning = tmp_path / "winning_patterns.json"
+    pending = tmp_path / "pending_patterns.json"
+    winning.write_text(json.dumps({"winning_topics": ["REAL"], "winning_hooks": ["realhook"], "losing_patterns": [], "title_formula": "", "topic_gen_hint": "realhint"}))
+    pending.write_text(json.dumps({"winning_topics": ["PENDING"], "winning_hooks": ["pendinghook"], "losing_patterns": [], "title_formula": "", "topic_gen_hint": "pendinghint"}))
+    hint = TopicGenTool._load_pattern_hint(str(winning))
+    assert "REAL" in hint
+    assert "PENDING" not in hint
 
 
 

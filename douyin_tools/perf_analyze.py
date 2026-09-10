@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 PUBLISHED_DIR = os.path.join(QUEUE_DIR, "published")
 PATTERNS_FILE = os.path.join(OPS_DATA_DIR, "winning_patterns.json")
+# M3-4 数据门禁 §5.6 line 320: winning_patterns 变更 = review 任务. 归因结论先落 pending_patterns.json (提案),
+# pattern_review.promote 转正后才写 winning_patterns.json. 消费者 (topic_gen/mlx_script/self_repair) 只读转正版.
+PENDING_PATTERNS_FILE = os.path.join(OPS_DATA_DIR, "pending_patterns.json")
 
 ANALYZE_PROMPT = """你是抖音短视频爆款归因分析师。基于已发布视频的播放表现和脚本内容，提取爆款模式。
 输入包含 Top 表现视频（播放高）和尾部差片（播放低）的标题/钩子/结尾/旁白摘要。
@@ -102,17 +105,29 @@ class PerfAnalyzeTool(BaseTool):
             "title_formula": patterns.get("title_formula", ""),
             "topic_gen_hint": patterns.get("topic_gen_hint", ""),
         }
-        # 原子写: temp + os.replace. 旧实现直接 open(w) truncate, 进程中途 crash (OOM/SIGKILL/OSError)
-        # 残留半截 JSON -> topic_gen/mlx_script 下次读 json.load 崩 -> 进化回灌断 (8-20→8-24 静默 4 天根因).
-        # 审计 P2-10: 加 file_lock 防 topic_gen 并发读半写状态.
+        # M3-4 数据门禁: 写 pending_patterns.json (提案), 不直接写 winning_patterns.json.
+        # 进化环每次自我修正过评审断点 (pattern_review.promote 转正). 假数据闭环被评审物理切断.
+        # 原子写: temp + os.replace + file_lock (审计 P2-10 防 topic_gen 并发读半写状态).
         from .script_helpers import file_lock
-        tmp_path = PATTERNS_FILE + ".tmp"
-        with file_lock(PATTERNS_FILE):
+        tmp_path = PENDING_PATTERNS_FILE + ".tmp"
+        with file_lock(PENDING_PATTERNS_FILE):
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(out, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, PATTERNS_FILE)
-        logger.info("perf_analyze ok written=%s hot=%d hooks=%s", PATTERNS_FILE, len(hot), out["winning_hooks"])
-        return json.dumps({"status": "analyzed", "patterns_file": PATTERNS_FILE, **out}, ensure_ascii=False)
+            os.replace(tmp_path, PENDING_PATTERNS_FILE)
+        logger.info(
+            "perf_analyze proposed patterns -> pending %s (await review promote) hot=%d hooks=%s",
+            PENDING_PATTERNS_FILE, len(hot), out["winning_hooks"],
+        )
+        return json.dumps(
+            {
+                "status": "proposed",
+                "needs_review": "true",
+                "pending_file": PENDING_PATTERNS_FILE,
+                "winning_file": PATTERNS_FILE,
+                **out,
+            },
+            ensure_ascii=False,
+        )
 
     async def _call_model(self, evidence, model):
         payload = {

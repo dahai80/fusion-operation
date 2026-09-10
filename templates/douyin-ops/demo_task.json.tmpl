@@ -1,0 +1,26 @@
+{
+  "$comment": "$team demo task (生成自 template: $template). 验收 M3 退出标准 #4: dummy 团队跑通 demo 任务.",
+  "team": "$team",
+  "vertical": "$vertical",
+  "demo_task": {
+    "id": "demo-$vertical-001",
+    "topic": "宇宙探索：木星的大红斑",
+    "series": "cosmos",
+    "hook_variant": "curiosity",
+    "chain": "restock_chain",
+    "steps": [
+      "script",
+      "image",
+      "tts",
+      "compose",
+      "enqueue"
+    ],
+    "expected_output": {
+      "script_json": "non-empty",
+      "image_paths": ">=1",
+      "audio_path": "non-empty",
+      "video_path": "non-empty",
+      "queued": true
+    }
+  }
+}

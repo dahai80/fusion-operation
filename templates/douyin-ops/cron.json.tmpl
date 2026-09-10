@@ -1,0 +1,31 @@
+{
+  "$comment": "$team cron 触发器配置 (生成自 template: $template). sync_graphs 上传 graph 后 backfill cron_graph_id.",
+  "team": "$team",
+  "vertical": "$vertical",
+  "crons": [
+    {
+      "name": "$team-morning-publish",
+      "schedule": "0 9 * * *",
+      "graph": "douyin_queue_publish",
+      "description": "早高峰发布触发"
+    },
+    {
+      "name": "$team-evening-publish",
+      "schedule": "0 19 * * *",
+      "graph": "douyin_queue_publish",
+      "description": "晚高峰发布触发"
+    },
+    {
+      "name": "$team-stats-collect",
+      "schedule": "0 */6 * * *",
+      "graph": "douyin_auto_publish",
+      "description": "每 6 小时数据采集"
+    },
+    {
+      "name": "$team-comment-reply",
+      "schedule": "30 */4 * * *",
+      "graph": "douyin_comment_reply",
+      "description": "每 4 小时评论回复"
+    }
+  ]
+}

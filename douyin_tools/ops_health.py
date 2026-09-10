@@ -74,6 +74,7 @@ class OpsHealthTool(BaseTool):
                 summary["cron"] = {"error": str(e)[:200]}
 
         summary["vid_backfill"] = self._vid_backfill_rate()
+        summary["queue_db"] = self._queue_db_health(alerts)
         healthy = len(alerts) == 0
         out = {
             "status": "healthy" if healthy else "degraded",
@@ -283,3 +284,45 @@ class OpsHealthTool(BaseTool):
                 with_vid += 1
         rate = (with_vid / total) if total else 0.0
         return {"rate": round(rate, 3), "total": total, "with_vid": with_vid}
+
+    @staticmethod
+    def _queue_db_health(alerts):
+        # M3-5: 投影一致性检查 (风险行 line 548) + published 90 天归档.
+        # DB 权威, 文件投影; drift → team.alert + 以 DB 修文件. ops_health 由 cron 周期触发 = 每小时 reconcile.
+        try:
+            from . import queue_ops, queue_store
+            from .history_store import append_alert
+            store = queue_ops._get_store()
+            dirs = {
+                "pending": queue_ops.QueueOpsTool.PENDING_DIR,
+                "inflight": queue_ops.QueueOpsTool.INFLIGHT_DIR,
+                "published": queue_ops.QueueOpsTool.PUBLISHED_DIR,
+                "failed": queue_ops.QueueOpsTool.FAILED_DIR,
+            }
+            drift, mismatches = queue_store.reconcile_to_files(store, dirs)
+            if drift > 0:
+                msg = f"queue_db_file_drift: drift={drift} DB authoritative, files repaired"
+                alerts.append(msg)
+                append_alert({
+                    "type": "queue_db",
+                    "alert": "file_drift",
+                    "drift": drift,
+                    "mismatches_sample": mismatches[:5],
+                    "severity": "warning",
+                    "snapshot_at": int(time.time()),
+                })
+            try:
+                retention_days = int(get_json_config().get("queue", {}).get("published_retention_days", 90))
+            except (TypeError, ValueError):
+                retention_days = 90
+            pruned = store.prune_older_than(retention_days)
+            if pruned:
+                for p in pruned:
+                    queue_store.remove_projection(p["id"], dirs)
+                alerts.append(f"published_archived_{retention_days}d: pruned={len(pruned)} 归档超期项已清理")
+            logger.info("queue_db_health drift=%d pruned=%d retention_days=%d", drift, len(pruned), retention_days)
+            return {"db_drift": drift, "pruned_90d": len(pruned), "retention_days": retention_days}
+        except Exception as e:
+            logger.warning("queue_db_health failed: %s", e)
+            alerts.append(f"queue_db_health_unavailable: {str(e)[:120]}")
+            return {"error": str(e)[:200]}

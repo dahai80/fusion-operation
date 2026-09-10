@@ -85,6 +85,10 @@
     "estimated_ratio_threshold": 0.2,
     "pending_stale_hours": 48
   },
+  "queue": {
+    "published_retention_days": 90,
+    "reconcile_on_startup": true
+  },
   "video": {
     "fps": 24,
     "width": 1080,

@@ -3,13 +3,12 @@ import logging
 import os
 import time
 
-import httpx
-
 from tools.base import BaseTool
 
 from . import config
 from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config, mlx_headers
 from .history_store import load_history
+from .resilient_http import post_json
 
 logger = logging.getLogger(__name__)
 
@@ -211,8 +210,7 @@ class SelfRepairTool(BaseTool):
             "max_tokens": 256,
         }
         try:
-            async with httpx.AsyncClient(timeout=config.MLX_TIMEOUT, headers=mlx_headers()) as client:
-                resp = await client.post(f"{config.MLX_BASE}/v1/chat/completions", json=payload)
+            resp = await post_json(f"{config.MLX_BASE}/v1/chat/completions", payload, service="mlx")
             if resp.status_code != 200:
                 logger.error("self_repair retitle http %s: %s", resp.status_code, resp.text[:200])
                 return None

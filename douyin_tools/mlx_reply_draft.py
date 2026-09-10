@@ -1,10 +1,9 @@
 import json
 import logging
 
-import httpx
-
 from . import config
 from .config import mlx_headers
+from .resilient_http import post_json
 from tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
@@ -70,8 +69,7 @@ class MlxReplyDraftTool(BaseTool):
             "max_tokens": max(1024, len(comments) * 200 + 256),
         }
         try:
-            async with httpx.AsyncClient(timeout=config.MLX_TIMEOUT, headers=mlx_headers()) as client:
-                resp = await client.post(f"{config.MLX_BASE}/v1/chat/completions", json=payload)
+            resp = await post_json(f"{config.MLX_BASE}/v1/chat/completions", payload, service="mlx")
             if resp.status_code != 200:
                 logger.error("mlx_reply_draft http %s: %s", resp.status_code, resp.text[:200])
                 return json.dumps({"error": f"http {resp.status_code}"})

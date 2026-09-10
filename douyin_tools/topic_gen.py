@@ -2,10 +2,9 @@ import json
 import logging
 import os
 
-import httpx
-
 from . import config
 from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, mlx_headers
+from .resilient_http import post_json
 from tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
@@ -77,8 +76,7 @@ class TopicGenTool(BaseTool):
             "max_tokens": 1024,
         }
         try:
-            async with httpx.AsyncClient(timeout=config.MLX_TIMEOUT, headers=mlx_headers()) as client:
-                resp = await client.post(f"{config.MLX_BASE}/v1/chat/completions", json=payload)
+            resp = await post_json(f"{config.MLX_BASE}/v1/chat/completions", payload, service="mlx")
             if resp.status_code != 200:
                 logger.error("topic_gen http %s: %s", resp.status_code, resp.text[:200])
                 return json.dumps({"error": f"http {resp.status_code}"})

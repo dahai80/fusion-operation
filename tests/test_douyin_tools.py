@@ -1287,17 +1287,10 @@ async def test_topic_gen_flat_output_for_injection(tmp_path, monkeypatch):
                 "topics": [{"topic": "木星大红斑", "series": "宇宙奥秘", "hook_type": "反常"}]
             })}}]}
 
-    class FakeClient:
-        def __init__(self, *a, **k):
-            pass
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, *a):
-            return False
-        async def post(self, *a, **k):
-            return FakeResp()
+    async def fake_post_json(*a, **k):
+        return FakeResp()
 
-    monkeypatch.setattr(tmod, "httpx", type("X", (), {"AsyncClient": FakeClient}), raising=False)
+    monkeypatch.setattr(tmod, "post_json", fake_post_json, raising=False)
     monkeypatch.setattr(tmod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
     monkeypatch.setattr(tmod, "PENDING_DIR", str(tmp_path / "pend"), raising=False)
     monkeypatch.setattr(tmod, "BLACKLIST_FILE", str(tmp_path / "bl.json"), raising=False)
@@ -3194,3 +3187,246 @@ def test_team_contract_repo_contract_valid():
     result = validate_contract()
     assert result["valid"] is True, f"repo team-contract.yaml invalid: {result['errors']}"
     assert result["team"] == "douyin-ops"
+
+
+# ============================================================
+# M3-7: LLM/ComfyUI retry (3 exp backoff) + circuit breaker
+# ============================================================
+
+async def test_post_json_success(tmp_path, monkeypatch):
+    # 正常 200 → 返回 resp, breaker record_success
+    from douyin_tools import resilient_http as rh
+    rh.reset_breakers()
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"ok": True}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            calls["n"] += 1
+            return FakeResp()
+
+    monkeypatch.setattr(rh.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rh, "mlx_headers", lambda: {})
+    monkeypatch.setattr(rh, "asyncio", type("A", (), {"sleep": staticmethod(lambda *a: _async_val(None))}))
+    resp = await rh.post_json("http://x/v1/chat", {"p": 1}, service="mlx_test")
+    assert resp.status_code == 200
+    assert calls["n"] == 1
+    br = rh.get_breaker("mlx_test")
+    assert br.state == "closed"
+    assert br.failures == 0
+
+
+async def test_post_json_retries_5xx_then_succeeds(tmp_path, monkeypatch):
+    # 前 2 次 503, 第 3 次 200 → 重试成功, 总调用 3
+    from douyin_tools import resilient_http as rh
+    rh.reset_breakers()
+    calls = {"n": 0}
+
+    class FakeResp:
+        def __init__(self, code):
+            self.status_code = code
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            calls["n"] += 1
+            return FakeResp(503 if calls["n"] < 3 else 200)
+
+    monkeypatch.setattr(rh.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rh, "mlx_headers", lambda: {})
+    monkeypatch.setattr(rh, "asyncio", type("A", (), {"sleep": staticmethod(lambda *a: _async_val(None))}))
+    resp = await rh.post_json("http://x", {}, service="mlx_rt", retries=3)
+    assert resp.status_code == 200
+    assert calls["n"] == 3
+
+
+async def test_post_json_retries_network_exc(tmp_path, monkeypatch):
+    # 网络异常重试, 最终成功
+    from douyin_tools import resilient_http as rh
+    rh.reset_breakers()
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise rh.httpx.ConnectError("boom")
+            return FakeResp()
+
+    monkeypatch.setattr(rh.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rh, "mlx_headers", lambda: {})
+    monkeypatch.setattr(rh, "asyncio", type("A", (), {"sleep": staticmethod(lambda *a: _async_val(None))}))
+    resp = await rh.post_json("http://x", {}, service="mlx_nx", retries=3)
+    assert resp.status_code == 200
+    assert calls["n"] == 2
+
+
+async def test_post_json_exhausts_retries_raises(tmp_path, monkeypatch):
+    # 3 次全 503 → 返回最后的 503 resp (不 raise, 调用方判 status)
+    from douyin_tools import resilient_http as rh
+    rh.reset_breakers()
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 503
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            calls["n"] += 1
+            return FakeResp()
+
+    monkeypatch.setattr(rh.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rh, "mlx_headers", lambda: {})
+    monkeypatch.setattr(rh, "asyncio", type("A", (), {"sleep": staticmethod(lambda *a: _async_val(None))}))
+    resp = await rh.post_json("http://x", {}, service="mlx_ex", retries=3)
+    assert resp.status_code == 503
+    assert calls["n"] == 3
+    br = rh.get_breaker("mlx_ex")
+    assert br.failures == 3
+
+
+async def test_circuit_opens_after_threshold(tmp_path, monkeypatch):
+    # 连续 threshold 次失败 → 熔断 open, 后续请求直接 CircuitOpenError
+    from douyin_tools import resilient_http as rh
+    rh.reset_breakers()
+    # 低 threshold 便于测试
+    monkeypatch.setattr(rh, "_resilience_cfg", lambda: {"circuit_threshold": 2, "circuit_cooldown_sec": 60, "max_retries": 1, "backoff_base_sec": 0})
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 503
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            calls["n"] += 1
+            return FakeResp()
+
+    monkeypatch.setattr(rh.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rh, "mlx_headers", lambda: {})
+    monkeypatch.setattr(rh, "asyncio", type("A", (), {"sleep": staticmethod(lambda *a: _async_val(None))}))
+    monkeypatch.setattr(rh, "append_alert", lambda alert: True)
+    # 第一次: 1 次重试 503 → failure 1
+    await rh.post_json("http://x", {}, service="mlx_cb", retries=1)
+    br = rh.get_breaker("mlx_cb")
+    assert br.failures == 1
+    assert br.state == "closed"
+    # 第二次: 1 次重试 503 → failure 2 → open
+    await rh.post_json("http://x", {}, service="mlx_cb", retries=1)
+    assert br.state == "open"
+    # 第三次: circuit open → CircuitOpenError, 不发 HTTP
+    with pytest.raises(rh.CircuitOpenError):
+        await rh.post_json("http://x", {}, service="mlx_cb")
+    assert calls["n"] == 2  # 第三次没发 HTTP
+
+
+async def test_circuit_record_success_resets(tmp_path, monkeypatch):
+    # 失败后成功 → breaker reset
+    from douyin_tools import resilient_http as rh
+    rh.reset_breakers()
+    monkeypatch.setattr(rh, "_resilience_cfg", lambda: {"circuit_threshold": 5, "circuit_cooldown_sec": 60, "max_retries": 1, "backoff_base_sec": 0})
+    calls = {"n": 0}
+
+    class FakeResp:
+        def __init__(self, code):
+            self.status_code = code
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            calls["n"] += 1
+            return FakeResp(503 if calls["n"] == 1 else 200)
+
+    monkeypatch.setattr(rh.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rh, "mlx_headers", lambda: {})
+    monkeypatch.setattr(rh, "asyncio", type("A", (), {"sleep": staticmethod(lambda *a: _async_val(None))}))
+    # 第一次 503 (retries=1, 不重试) → failure 1
+    await rh.post_json("http://x", {}, service="mlx_rs", retries=1)
+    br = rh.get_breaker("mlx_rs")
+    assert br.failures == 1
+    # 第二次 200 → success → reset
+    await rh.post_json("http://x", {}, service="mlx_rs", retries=1)
+    assert br.failures == 0
+    assert br.state == "closed"
+
+
+async def test_circuit_open_emits_team_alert(tmp_path, monkeypatch):
+    # 熔断 open 时 append_alert 被调用 (team.alert)
+    from douyin_tools import resilient_http as rh
+    rh.reset_breakers()
+    monkeypatch.setattr(rh, "_resilience_cfg", lambda: {"circuit_threshold": 1, "circuit_cooldown_sec": 60, "max_retries": 1, "backoff_base_sec": 0})
+    alerts = []
+
+    class FakeResp:
+        status_code = 500
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None):
+            return FakeResp()
+
+    monkeypatch.setattr(rh.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rh, "mlx_headers", lambda: {})
+    monkeypatch.setattr(rh, "asyncio", type("A", (), {"sleep": staticmethod(lambda *a: _async_val(None))}))
+    monkeypatch.setattr(rh, "append_alert", lambda alert: alerts.append(alert))
+    await rh.post_json("http://x", {}, service="mlx_alert", retries=1)
+    assert len(alerts) == 1
+    assert alerts[0]["type"] == "circuit_open"
+    assert alerts[0]["service"] == "mlx_alert"

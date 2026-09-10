@@ -8,6 +8,7 @@ import httpx
 
 from . import config
 from .config import COMFYUI_AUDIO_TEMP_DIR, COMFYUI_OUTPUT_DIR
+from .resilient_http import post_json
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,7 @@ class ComfyUIClient:
         # 提交 prompt graph, 返回 prompt_id. graph 为扁平 dict: {node_id: {class_type, inputs}}.
         payload = {"prompt": graph, "client_id": client_id}
         try:
-            async with httpx.AsyncClient(timeout=30) as c:
-                r = await c.post(f"{self.base}/prompt", json=payload)
+            r = await post_json(f"{self.base}/prompt", payload, service="comfyui", timeout=30, headers={})
             if r.status_code != 200:
                 logger.error("comfyui /prompt http %s: %s", r.status_code, r.text[:300])
                 return ""

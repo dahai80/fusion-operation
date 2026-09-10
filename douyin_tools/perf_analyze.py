@@ -9,6 +9,7 @@ from tools.base import BaseTool
 from . import config
 from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, mlx_headers, get_json_config
 from .history_store import latest_per_vid, load_history
+from .resilient_http import post_json, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +141,13 @@ class PerfAnalyzeTool(BaseTool):
             "max_tokens": 2048,
         }
         try:
-            async with httpx.AsyncClient(timeout=config.MLX_TIMEOUT, headers=mlx_headers()) as client:
-                resp = await client.post(f"{config.MLX_BASE}/v1/chat/completions", json=payload)
+            resp = await post_json(f"{config.MLX_BASE}/v1/chat/completions", payload, service="mlx")
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             logger.error("perf_analyze mlx unavailable: %s: %s", type(e).__name__, str(e)[:200])
             raise RuntimeError(f"perf_analyze mlx unavailable: {type(e).__name__}")
+        except CircuitOpenError as e:
+            logger.error("perf_analyze circuit open: %s", e)
+            raise RuntimeError(f"perf_analyze mlx circuit open")
         except Exception:
             logger.exception("perf_analyze model call infra failed")
             raise RuntimeError("perf_analyze model call infra failed")

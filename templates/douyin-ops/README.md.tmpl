@@ -1,0 +1,33 @@
+# $team
+
+Generated team package (vertical: `$vertical`, template: `$template`).
+
+## Structure
+
+```
+$team/
+├── team-contract.yaml   # §6.3 文档即契约 (GUI 可渲染, Lead 强制读取)
+├── roles.py             # §6.1 六角色 + lead 工具面裁剪
+├── cron.json            # cron 触发器配置
+├── graphs/              # mini-graph DAG (restock chain 5 步)
+├── data/                # 运行时数据 (queue/ops/evidence)
+└── demo_task.json       # demo 任务 (M3 验收 #4)
+```
+
+## Slots (§6.4 差异项)
+
+`team-contract.yaml` 的 `slots:` 块承载垂直差异:
+- `platform_selectors`: 平台 DOM/API 选择器
+- `data_sources`: 数据源
+- `compliance_gates`: 合规门禁
+
+换垂直团队 = 填 slots + 换 graphs, 核心 (任务板/租约/评审/证据) 零改动.
+
+## Usage
+
+```bash
+# 上传 graphs + 配置 cron
+python sync_graphs.py $team/graphs/*.json
+# 配置 team contract
+# Lead 规划轮读取 team-contract.yaml
+```

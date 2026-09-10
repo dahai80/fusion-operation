@@ -1,0 +1,25 @@
+{
+  "name": "douyin_step_image",
+  "description": "M3-2 restock step: generate image (IMAGER role). Single-tool mini-graph, orchestrator-driven chain step 1.",
+  "start_node_id": "start",
+  "version": "1.0",
+  "agent_id": "",
+  "stop_on_tool_error": true,
+  "nodes": {
+    "start": {"type": "start", "label": "开始"},
+    "img": {
+      "type": "tool",
+      "label": "配图(补货步骤)",
+      "tool_name": "comfyui_image",
+      "tool_params": {
+        "prompts": "{{script_json}}",
+        "output_mapping": {"image_paths": "image_paths"}
+      }
+    },
+    "end": {"type": "end", "label": "结束"}
+  },
+  "edges": [
+    {"source_id": "start", "target_id": "img"},
+    {"source_id": "img", "target_id": "end"}
+  ]
+}

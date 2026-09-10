@@ -8,10 +8,10 @@ from tools.base import BaseTool
 
 from . import config
 from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, mlx_headers, get_json_config
+from .history_store import latest_per_vid, load_history
 
 logger = logging.getLogger(__name__)
 
-HISTORY_FILE = os.path.join(OPS_DATA_DIR, "stats_history.jsonl")
 PUBLISHED_DIR = os.path.join(QUEUE_DIR, "published")
 PATTERNS_FILE = os.path.join(OPS_DATA_DIR, "winning_patterns.json")
 
@@ -44,11 +44,11 @@ class PerfAnalyzeTool(BaseTool):
         model = model or config.DEFAULT_CHAT_MODEL
         ensure_dirs()
         os.makedirs(OPS_DATA_DIR, exist_ok=True)
-        rows = self._load_history()
+        rows = load_history()
         if not rows:
             logger.warning("perf_analyze: no history")
             return json.dumps({"error": "no history", "patterns_file": ""}, ensure_ascii=False)
-        latest = self._latest_per_vid(rows)
+        latest = latest_per_vid(rows)
         # 审计0908 F3: estimated 行 plays 被强制置 0 -> 永落 cold 切片 -> 归因提取假"差片共性"
         # -> 回灌生成端 -> 自增强污染闭环 (系统核心价值主张失效). perf_track._rank 已排除,
         # perf_analyze (决策层) 漏修. 止血: 归因输入只取真实数据行.
@@ -192,43 +192,6 @@ class PerfAnalyzeTool(BaseTool):
             sc.setdefault("hook_variant", item.get("hook_variant", ""))
             out[vid] = sc
         return out
-
-    @staticmethod
-    def _load_history():
-        out = []
-        try:
-            with open(HISTORY_FILE, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        out.append(json.loads(line))
-                    except ValueError:
-                        pass
-        except FileNotFoundError:
-            return out
-        return out
-
-    @staticmethod
-    def _latest_per_vid(rows):
-        latest = {}
-        latest_ts = {}
-        from .perf_track import PerfTrackTool
-        for r in rows:
-            vid = r.get("vid", "")
-            if not vid:
-                continue
-            # 审计 0906 P3-5: 字符串字典序比 snapshot_at 格式混时不一致 (perf_track 已改 epoch).
-            # 统一 _parse_snap_time -> epoch 比较.
-            sa = r.get("snapshot_at", "")
-            dt = PerfTrackTool._parse_snap_time(sa)
-            ts = dt.timestamp() if dt else 0
-            cur = latest.get(vid)
-            if cur is None or ts >= latest_ts.get(vid, -1):
-                latest[vid] = r
-                latest_ts[vid] = ts
-        return latest
 
     @staticmethod
     def _today(rows):

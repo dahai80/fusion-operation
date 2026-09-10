@@ -5,6 +5,7 @@ import time
 import pytest
 
 from douyin_tools import create_douyin_registry
+from douyin_tools import history_store
 from douyin_tools.config import ensure_dirs, IMAGE_DIR, AUDIO_DIR, VIDEO_DIR, OPS_DATA_DIR
 from douyin_tools.ffmpeg_compose import FfmpegComposeTool
 from douyin_tools.mlx_image import MlxImageTool
@@ -465,7 +466,7 @@ def test_ops_report_parse_comments():
 def test_ops_report_build_and_history(tmp_path, monkeypatch):
     import douyin_tools.ops_report as mod
     hist = tmp_path / "stats_history.jsonl"
-    monkeypatch.setattr(mod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(mod, "OPS_DATA_DIR", str(tmp_path), raising=False)
     t = OpsReportTool()
     stats = {
@@ -495,7 +496,7 @@ def test_ops_report_three_sections_and_rank(tmp_path, monkeypatch):
     win = tmp_path / "winning_patterns.json"
     pub = tmp_path / "published"
     pub.mkdir()
-    monkeypatch.setattr(mod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(mod, "WINNING_FILE", str(win))
     monkeypatch.setattr(mod, "PUBLISHED_DIR", str(pub))
     monkeypatch.setattr(mod, "OPS_DATA_DIR", str(tmp_path), raising=False)
@@ -767,7 +768,7 @@ def test_perf_track_schema():
 async def test_perf_track_snapshot_and_rank(tmp_path, monkeypatch):
     import douyin_tools.perf_track as pmod
     hist = tmp_path / "stats_history.jsonl"
-    monkeypatch.setattr(pmod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(pmod, "OPS_DATA_DIR", str(tmp_path), raising=False)
     from douyin_tools.perf_track import PerfTrackTool
     t = PerfTrackTool()
@@ -818,57 +819,33 @@ def test_perf_track_stage():
 
 def test_perf_track_prune_history_caps_per_vid(tmp_path, monkeypatch):
     # A3 + A1: stats_history.jsonl 每 vid 最多留 max_history_per_vid 条, 超 prune_threshold 触发压缩.
-    # 阈值走声明式配置 (DOUYIN_CONFIG_FILE), 不 monkeypatch 模块级名 (A1 实时读配置绕过模块名).
-    import importlib
-    import douyin_tools.config as cfg
-    import douyin_tools.perf_track as pmod
-    cfg_path = tmp_path / "douyin_config.json"
-    cfg_path.write_text('{"perf_track":{"max_history_per_vid":3,"prune_threshold":5}}')
+    # M3-3: prune_history 收敛到 history_store, path 显式传入.
+    from douyin_tools.history_store import prune_history
     hist = tmp_path / "stats_history.jsonl"
-    monkeypatch.setenv("DOUYIN_CONFIG_FILE", str(cfg_path))
-    importlib.reload(cfg)
-    importlib.reload(pmod)
-    monkeypatch.setattr(pmod, "HISTORY_FILE", str(hist))
-    from douyin_tools.perf_track import PerfTrackTool
     # 1 vid 写 10 条 (超 threshold 5), 应压缩到只留最新 3 条.
     rows = [{"vid": "V1", "plays": i, "snapshot_at": f"2026-08-0{i}"} for i in range(10)]
     with open(hist, "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
-    dropped = PerfTrackTool._prune_history()
+    dropped = prune_history(max_per_vid=3, prune_threshold=5, path=str(hist))
     lines = hist.read_text().strip().split("\n")
     assert len(lines) == 3, "must cap to max_history_per_vid"
     assert dropped == 7
     kept = [json.loads(l) for l in lines]
     # 保留尾部最新 3 条 (plays 7,8,9).
     assert [k["plays"] for k in kept] == [7, 8, 9]
-    # 恢复默认配置, 避免污染同 session 后续测试.
-    monkeypatch.delenv("DOUYIN_CONFIG_FILE", raising=False)
-    importlib.reload(cfg)
-    importlib.reload(pmod)
 
 
 def test_perf_track_prune_history_below_threshold_noop(tmp_path, monkeypatch):
     # A1: 阈值走声明式配置, 低于 prune_threshold 不重写文件.
-    import importlib
-    import douyin_tools.config as cfg
-    import douyin_tools.perf_track as pmod
-    cfg_path = tmp_path / "douyin_config.json"
-    cfg_path.write_text('{"perf_track":{"max_history_per_vid":40,"prune_threshold":5000}}')
+    # M3-3: prune_history 收敛到 history_store, path 显式传入.
+    from douyin_tools.history_store import prune_history
     hist = tmp_path / "stats_history.jsonl"
-    monkeypatch.setenv("DOUYIN_CONFIG_FILE", str(cfg_path))
-    importlib.reload(cfg)
-    importlib.reload(pmod)
-    monkeypatch.setattr(pmod, "HISTORY_FILE", str(hist))
-    from douyin_tools.perf_track import PerfTrackTool
     with open(hist, "w") as f:
         f.write(json.dumps({"vid": "V1", "plays": 1}) + "\n")
-    dropped = PerfTrackTool._prune_history()
+    dropped = prune_history(max_per_vid=40, prune_threshold=5000, path=str(hist))
     assert dropped == 0
     assert hist.read_text().count("\n") == 1, "below threshold must not rewrite"
-    monkeypatch.delenv("DOUYIN_CONFIG_FILE", raising=False)
-    importlib.reload(cfg)
-    importlib.reload(pmod)
 
 
 def test_perf_analyze_schema():
@@ -886,7 +863,7 @@ async def test_perf_analyze_insufficient(tmp_path, monkeypatch):
         json.dumps({"vid": "1", "plays": 10, "snapshot_at": "2026-08-10 10:00:00"}),
         json.dumps({"vid": "2", "plays": 5, "snapshot_at": "2026-08-10 10:00:00"}),
     ]))
-    monkeypatch.setattr(amod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(amod, "PATTERNS_FILE", str(tmp_path / "patterns.json"), raising=False)
     monkeypatch.setattr(amod, "OPS_DATA_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(amod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
@@ -904,7 +881,7 @@ async def test_perf_analyze_infra_failure_raises(tmp_path, monkeypatch):
         json.dumps({"vid": str(i), "plays": 100 + i, "snapshot_at": "2026-08-10 10:00:00"})
         for i in range(10)
     ]))
-    monkeypatch.setattr(amod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(amod, "PATTERNS_FILE", str(tmp_path / "patterns.json"), raising=False)
     monkeypatch.setattr(amod, "OPS_DATA_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(amod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
@@ -933,7 +910,7 @@ async def test_perf_analyze_parse_failure_soft(tmp_path, monkeypatch):
     ]))
     patterns_file = tmp_path / "patterns.json"
     patterns_file.write_text(json.dumps({"winning_topics": ["old"], "updated_at": "2026-08-09"}))
-    monkeypatch.setattr(amod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(amod, "PATTERNS_FILE", str(patterns_file), raising=False)
     monkeypatch.setattr(amod, "OPS_DATA_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(amod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
@@ -1007,7 +984,7 @@ async def test_self_repair_scan(tmp_path, monkeypatch):
         json.dumps({"vid": "v2", "title": "好片", "plays": 500, "interaction_rate": 0.05,
                     "age_hours": 80, "snapshot_at": "2026-08-10 10:00:00"}),
     ]))
-    monkeypatch.setattr(smod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     pub = tmp_path / "pub"
     pub.mkdir()
     json.dump({"vid": "v1", "title": "差片", "video_path": "/x.mp4"}, open(pub / "v1.json", "w"), ensure_ascii=False)
@@ -1031,7 +1008,7 @@ async def test_self_repair_scan_dedup_review(tmp_path, monkeypatch):
         json.dumps({"vid": "v1", "title": "差片", "plays": 20, "interaction_rate": 0.005,
                     "age_hours": 80, "snapshot_at": "2026-08-10 10:00:00"}),
     ]))
-    monkeypatch.setattr(smod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     pub = tmp_path / "pub"
     pub.mkdir()
     json.dump({"vid": "v1", "title": "差片", "video_path": "/x.mp4"}, open(pub / "v1.json", "w"), ensure_ascii=False)
@@ -1055,7 +1032,7 @@ async def test_self_repair_blacklist(tmp_path, monkeypatch):
     import douyin_tools.self_repair as smod
     bl = tmp_path / "bl.json"
     monkeypatch.setattr(smod, "BLACKLIST_FILE", str(bl), raising=False)
-    monkeypatch.setattr(smod, "HISTORY_FILE", str(tmp_path / "h.jsonl"), raising=False)
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(tmp_path / "h.jsonl"), raising=False)
     monkeypatch.setattr(smod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
     monkeypatch.setattr(smod, "PENDING_DIR", str(tmp_path / "pend"), raising=False)
     from douyin_tools.self_repair import SelfRepairTool
@@ -1071,7 +1048,7 @@ async def test_self_repair_blacklist(tmp_path, monkeypatch):
 
 async def test_self_repair_reclip_skip(tmp_path, monkeypatch):
     import douyin_tools.self_repair as smod
-    monkeypatch.setattr(smod, "HISTORY_FILE", str(tmp_path / "h.jsonl"), raising=False)
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(tmp_path / "h.jsonl"), raising=False)
     monkeypatch.setattr(smod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)
     monkeypatch.setattr(smod, "PENDING_DIR", str(tmp_path / "pend"), raising=False)
     from douyin_tools.self_repair import SelfRepairTool
@@ -2154,7 +2131,7 @@ def test_ops_health_file_alerts(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PATTERNS_FILE", str(odir / "winning_patterns.json"), raising=False)
     monkeypatch.setattr(mod, "BLACKLIST_FILE", str(odir / "topic_blacklist.json"), raising=False)
     monkeypatch.setattr(mod, "REPLIED_FILE", str(odir / "replied.json"), raising=False)
-    monkeypatch.setattr(mod, "HISTORY_FILE", str(odir / "stats_history.jsonl"), raising=False)
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(odir / "stats_history.jsonl"), raising=False)
     # 全部文件缺失 -> 三条停摆告警 + low_stock(pending=0).
     t = mod.OpsHealthTool()
     res = json.loads(asyncio.run(t.execute(check_cron=False)))
@@ -2341,7 +2318,7 @@ def test_ops_health_stale_inflight_alert(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PATTERNS_FILE", str(odir / "wp.json"), raising=False)
     monkeypatch.setattr(mod, "BLACKLIST_FILE", str(odir / "bl.json"), raising=False)
     monkeypatch.setattr(mod, "REPLIED_FILE", str(odir / "r.json"), raising=False)
-    monkeypatch.setattr(mod, "HISTORY_FILE", str(odir / "h.jsonl"), raising=False)
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(odir / "h.jsonl"), raising=False)
     monkeypatch.setattr(mod, "LEASE_TTL", 100, raising=False)
     now = int(time.time())
     # stale: leased_until 远超 2×TTL=200 (now - leased_until > 200)
@@ -2370,7 +2347,7 @@ async def test_perf_analyze_excludes_estimated_from_attribution(tmp_path, monkey
     rows.append(json.dumps({"vid": "est0", "plays": 0, "estimated": True, "title": "假数据A", "snapshot_at": "2026-08-10 10:00:00"}))
     rows.append(json.dumps({"vid": "est1", "plays": 0, "estimated": True, "title": "假数据B", "snapshot_at": "2026-08-10 10:00:00"}))
     hist.write_text("\n".join(rows))
-    monkeypatch.setattr(amod, "HISTORY_FILE", str(hist))
+    monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
     monkeypatch.setattr(amod, "PATTERNS_FILE", str(tmp_path / "patterns.json"), raising=False)
     monkeypatch.setattr(amod, "OPS_DATA_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(amod, "PUBLISHED_DIR", str(tmp_path / "pub"), raising=False)

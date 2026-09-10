@@ -708,15 +708,8 @@ async def test_queue_ops_reclaim_expired_lease(tmp_path, monkeypatch):
     r = json.loads(await t.execute(action="enqueue", video_path=str(video), script_json=script, topic="reclaim"))
     item_id = r["item_id"]
     await t.execute(action="dequeue")  # node-A 拿走, 写 lease until=now+300
-    # 模拟崩溃: 把 leased_until 调到过去
-    inflight_path = os.path.join(qdir, "inflight", f"{item_id}.json")
-    with open(inflight_path, encoding="utf-8") as f:
-        item = json.load(f)
-    item["leased_until"] = int(time.time()) - 1  # 过期
-    tmp_p = inflight_path + ".tmp"
-    with open(tmp_p, "w", encoding="utf-8") as f:
-        json.dump(item, f, ensure_ascii=False)
-    os.replace(tmp_p, inflight_path)
+    # M3-5: DB 权威, 模拟崩溃直接改 DB leased_until 到过去 (旧测试改文件不再生效)
+    qmod._get_store().set_leased_until(item_id, int(time.time()) - 1)
     # 下轮 dequeue 应回收过期 item 回 pending, 再取出
     d = json.loads(await t.execute(action="dequeue"))
     assert d["has_stock"] == "true"
@@ -739,17 +732,225 @@ async def test_queue_ops_archive_expired_foreign_lease_ok(tmp_path, monkeypatch)
     r = json.loads(await t.execute(action="enqueue", video_path=str(video), script_json=script, topic="expired-ok"))
     item_id = r["item_id"]
     await t.execute(action="dequeue")  # node-A 拿走
-    inflight_path = os.path.join(qdir, "inflight", f"{item_id}.json")
-    with open(inflight_path, encoding="utf-8") as f:
-        item = json.load(f)
-    item["leased_until"] = int(time.time()) - 1  # 过期
-    tmp_p = inflight_path + ".tmp"
-    with open(tmp_p, "w", encoding="utf-8") as f:
-        json.dump(item, f, ensure_ascii=False)
-    os.replace(tmp_p, inflight_path)
+    # M3-5: DB 权威, 模拟崩溃直接改 DB leased_until 到过去
+    qmod._get_store().set_leased_until(item_id, int(time.time()) - 1)
     monkeypatch.setattr(qmod, "NODE_ID", "node-B")
     a = json.loads(await t.execute(action="archive", item_id=item_id, status="published", vid="v1"))
     assert a["status"] == "archived"
+
+
+def _setup_queue(tmp_path, monkeypatch):
+    # M3-5: 共享 setup — tmp QUEUE_DIR + 4 目录常量 + store 缓存重置.
+    from douyin_tools import queue_ops as qmod
+    qdir = str(tmp_path / "queue")
+    monkeypatch.setattr(qmod, "QUEUE_DIR", qdir)
+    for d in ("pending", "inflight", "published", "failed"):
+        monkeypatch.setattr(QueueOpsTool, f"{d.upper()}_DIR", os.path.join(qdir, d))
+    qmod.reset_store()
+    return qmod, qdir
+
+
+def test_queue_store_enqueue_dequeue_archive(tmp_path, monkeypatch):
+    from douyin_tools import queue_store
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    store = queue_store.QueueStore(os.path.join(qdir, "queue.db"))
+    item_id = store.enqueue({"id": "a1", "video_path": "/v.mp4", "title": "t", "created_at": int(time.time())})
+    assert item_id == "a1"
+    assert store.count()["pending"] == 1
+    d = store.dequeue(300, "node-A")
+    assert d["id"] == "a1"
+    assert d["status"] == "inflight"
+    assert d["leased_by"] == "node-A"
+    assert store.count()["inflight"] == 1
+    res = store.archive("a1", "published", "vid9", "node-A")
+    assert res["status"] == "published"
+    assert res["vid"] == "vid9"
+    assert store.count()["published"] == 1
+    store.close()
+
+
+def test_queue_store_dequeue_atomic_no_dup(tmp_path, monkeypatch):
+    import threading
+    from douyin_tools import queue_store
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    store = queue_store.QueueStore(os.path.join(qdir, "queue.db"))
+    for i in range(2):
+        store.enqueue({"id": f"s{i}", "video_path": "/v.mp4", "title": "t", "created_at": int(time.time()) + i})
+    results = []
+    def grab():
+        r = store.dequeue(300, "n")
+        if r:
+            results.append(r["id"])
+    t1 = threading.Thread(target=grab)
+    t2 = threading.Thread(target=grab)
+    t1.start(); t2.start(); t1.join(); t2.join()
+    assert len(results) == 2
+    assert set(results) == {"s0", "s1"}
+    store.close()
+
+
+def test_queue_store_reclaim_expired(tmp_path, monkeypatch):
+    from douyin_tools import queue_store
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    store = queue_store.QueueStore(os.path.join(qdir, "queue.db"))
+    store.enqueue({"id": "r1", "video_path": "/v", "title": "t", "created_at": int(time.time())})
+    store.dequeue(300, "node-A")
+    store.set_leased_until("r1", int(time.time()) - 10)
+    reclaimed = store.reclaim_expired()
+    assert reclaimed == 1
+    assert store.count()["pending"] == 1
+    store.close()
+
+
+def test_queue_store_requeue_strips_lease(tmp_path, monkeypatch):
+    from douyin_tools import queue_store
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    store = queue_store.QueueStore(os.path.join(qdir, "queue.db"))
+    store.enqueue({"id": "rq1", "video_path": "/v", "title": "t", "created_at": int(time.time())})
+    store.dequeue(300, "node-A")
+    ok = store.requeue("rq1")
+    assert ok is True
+    d = store.get("rq1")
+    assert d["status"] == "pending"
+    assert d["leased_by"] is None
+    assert d["requeued_at"] is not None
+    store.close()
+
+
+def test_queue_store_archive_lease_guard(tmp_path, monkeypatch):
+    from douyin_tools import queue_store
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    store = queue_store.QueueStore(os.path.join(qdir, "queue.db"))
+    store.enqueue({"id": "g1", "video_path": "/v", "title": "t", "created_at": int(time.time())})
+    store.dequeue(300, "node-A")
+    # node-B 归档, lease 未过期 → 拒绝
+    r = store.archive("g1", "published", "", "node-B")
+    assert "error" in r
+    # 过期后 node-B 可归档
+    store.set_leased_until("g1", int(time.time()) - 1)
+    r2 = store.archive("g1", "published", "vid", "node-B")
+    assert r2["status"] == "published"
+    store.close()
+
+
+async def test_project_to_files_writes_projection(tmp_path, monkeypatch):
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    t = QueueOpsTool()
+    video = tmp_path / "v.mp4"; video.write_bytes(b"x")
+    script = json.dumps({"title": "proj", "narration": "n", "scenes": []})
+    r = json.loads(await t.execute(action="enqueue", video_path=str(video), script_json=script, topic="proj"))
+    item_id = r["item_id"]
+    assert os.path.exists(os.path.join(qdir, "pending", f"{item_id}.json"))
+    await t.execute(action="dequeue")
+    assert not os.path.exists(os.path.join(qdir, "pending", f"{item_id}.json"))
+    assert os.path.exists(os.path.join(qdir, "inflight", f"{item_id}.json"))
+    await t.execute(action="archive", item_id=item_id, status="published", vid="v1")
+    assert os.path.exists(os.path.join(qdir, "published", f"{item_id}.json"))
+    assert not os.path.exists(os.path.join(qdir, "inflight", f"{item_id}.json"))
+
+
+def test_reconcile_drift_repairs_files(tmp_path, monkeypatch):
+    from douyin_tools import queue_store
+    from douyin_tools import queue_ops as qmod
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    store = qmod._get_store()
+    store.enqueue({"id": "rec1", "video_path": "/v", "title": "t", "created_at": int(time.time())})
+    dirs = qmod._dirs()
+    queue_store.write_projection(store.get("rec1"), dirs)
+    # 删 pending 文件制造 drift
+    os.remove(os.path.join(qdir, "pending", "rec1.json"))
+    # 加多余孤儿文件
+    with open(os.path.join(qdir, "pending", "orphan.json"), "w") as f:
+        json.dump({"id": "orphan"}, f)
+    drift, mismatches = queue_store.reconcile_to_files(store, dirs)
+    assert drift >= 2
+    # 修复后 pending 有 rec1, orphan 删除
+    assert os.path.exists(os.path.join(qdir, "pending", "rec1.json"))
+    assert not os.path.exists(os.path.join(qdir, "pending", "orphan.json"))
+
+
+def test_reconcile_alerts_on_drift(tmp_path, monkeypatch):
+    # ops_health._queue_db_health: drift → 修文件 + append_alert (reconcile 修复后文件回正).
+    from douyin_tools import history_store
+    from douyin_tools import queue_ops as qmod
+    from douyin_tools.ops_health import OpsHealthTool
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(history_store, "ALERTS_FILE", str(tmp_path / "alerts.jsonl"))
+    store = qmod._get_store()
+    # enqueue 后 DB 有行但目录无投影文件 = drift (不写投影)
+    store.enqueue({"id": "al1", "video_path": "/v", "title": "t", "created_at": int(time.time())})
+    alerts = []
+    OpsHealthTool._queue_db_health(alerts)
+    assert any("queue_db_file_drift" in a for a in alerts)
+    assert os.path.exists(str(tmp_path / "alerts.jsonl"))
+    # 修复后文件回正
+    assert os.path.exists(os.path.join(qdir, "pending", "al1.json"))
+
+
+def test_prune_older_than_90_days(tmp_path, monkeypatch):
+    from douyin_tools import queue_store
+    from douyin_tools import queue_ops as qmod
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    store = qmod._get_store()
+    now = int(time.time())
+    # 1 旧 (>90d) + 2 新
+    store.enqueue({"id": "old1", "video_path": "/v", "title": "t", "created_at": now - 100 * 86400})
+    store.archive("old1", "published", "v", "n", now=now - 100 * 86400)
+    store.enqueue({"id": "new1", "video_path": "/v", "title": "t", "created_at": now})
+    store.archive("new1", "published", "v", "n", now=now)
+    store.enqueue({"id": "new2", "video_path": "/v", "title": "t", "created_at": now})
+    store.archive("new2", "published", "v", "n", now=now)
+    deleted = store.prune_older_than(90)
+    assert len(deleted) == 1
+    assert deleted[0]["id"] == "old1"
+    assert store.count()["published"] == 2
+
+
+def test_migrate_files_to_db_on_first_init(tmp_path, monkeypatch):
+    from douyin_tools import queue_store
+    from douyin_tools import queue_ops as qmod
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    # 预置 pending + published 文件
+    os.makedirs(os.path.join(qdir, "pending"), exist_ok=True)
+    os.makedirs(os.path.join(qdir, "published"), exist_ok=True)
+    with open(os.path.join(qdir, "pending", "m1.json"), "w") as f:
+        json.dump({"id": "m1", "video_path": "/v", "title": "t", "created_at": int(time.time())}, f)
+    with open(os.path.join(qdir, "published", "m2.json"), "w") as f:
+        json.dump({"id": "m2", "video_path": "/v", "title": "t", "created_at": int(time.time()), "vid": "v"}, f)
+    store = qmod._get_store()  # 触发 migrate
+    assert store.count()["pending"] == 1
+    assert store.count()["published"] == 1
+    assert store.get("m1") is not None
+    assert store.get("m2") is not None
+
+
+async def test_consumers_read_projection_unchanged(tmp_path, monkeypatch):
+    # regression: topic_gen 读 published/ 投影文件正常 (DB 存在场景)
+    from douyin_tools.topic_gen import TopicGenTool
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr("douyin_tools.topic_gen.PUBLISHED_DIR", os.path.join(qdir, "published"))
+    t = QueueOpsTool()
+    video = tmp_path / "v.mp4"; video.write_bytes(b"x")
+    script = json.dumps({"title": "cons", "narration": "n", "scenes": []})
+    r = json.loads(await t.execute(action="enqueue", video_path=str(video), script_json=script, topic="cons"))
+    await t.execute(action="dequeue")
+    await t.execute(action="archive", item_id=r["item_id"], status="published", vid="cv")
+    tg = TopicGenTool()
+    titles = tg._load_published_titles()
+    assert "cons" in titles
+
+
+async def test_ops_health_queue_db_health(tmp_path, monkeypatch):
+    from douyin_tools.ops_health import OpsHealthTool
+    from douyin_tools import queue_ops as qmod
+    qmod, qdir = _setup_queue(tmp_path, monkeypatch)
+    # DB 无内容 → drift 0, prune 0
+    t = OpsHealthTool()
+    out = json.loads(await t.execute(check_cron=False))
+    assert out["status"] in ("healthy", "degraded")
+    assert "queue_db" in out["summary"]
+    qd = out["summary"]["queue_db"]
+    assert qd.get("db_drift", 0) == 0
 
 
 def test_topic_gen_schema():

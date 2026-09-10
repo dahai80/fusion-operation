@@ -3430,3 +3430,126 @@ async def test_circuit_open_emits_team_alert(tmp_path, monkeypatch):
     assert len(alerts) == 1
     assert alerts[0]["type"] == "circuit_open"
     assert alerts[0]["service"] == "mlx_alert"
+
+
+# ============================================================
+# M3-8: deploy de-personalization + keychain + CI gate
+# ============================================================
+
+def test_config_no_hardcoded_user_paths():
+    # M3-8: config.py 默认路径不得硬编码 /Users/dahai (注释除外)
+    from douyin_tools import config as cmod
+    import inspect
+
+    src = inspect.getsource(cmod)
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "/Users/dahai" not in line, f"hardcoded personal path: {line.strip()}"
+
+
+def test_config_paths_are_repo_relative():
+    # M3-8: VIDEO_DIR/AUDIO_DIR/IMAGE_DIR/OPS_DATA_DIR/QUEUE_DIR 默认 = REPO_ROOT/out/...
+    # (REPO_ROOT 动态求值, 换机器自动适配, 不硬编码)
+    from douyin_tools import config as cmod
+    expected_base = os.path.join(cmod.REPO_ROOT, "out")
+    for name in ("VIDEO_DIR", "AUDIO_DIR", "IMAGE_DIR", "OPS_DATA_DIR", "QUEUE_DIR"):
+        val = getattr(cmod, name)
+        assert val.startswith(expected_base), f"{name}={val} not under REPO_ROOT/out={expected_base}"
+
+
+def test_credential_store_get_with_fallback(monkeypatch):
+    # keyring 不可用时 fallback 生效
+    from douyin_tools import credential_store as cs
+    monkeypatch.setattr(cs, "_HAS_KEYRING", False)
+    assert cs.get_credential("x", fallback="envkey") == "envkey"
+
+
+def test_credential_store_get_from_keyring(monkeypatch):
+    # keyring 可用时优先 keyring
+    from douyin_tools import credential_store as cs
+
+    class FakeKeyring:
+        @staticmethod
+        def get_password(service, name):
+            return "kr_key"
+
+    monkeypatch.setattr(cs, "_HAS_KEYRING", True)
+    monkeypatch.setattr(cs, "keyring", FakeKeyring)
+    assert cs.get_credential("mlx_api_key", fallback="envkey") == "kr_key"
+
+
+def test_credential_store_set(monkeypatch):
+    from douyin_tools import credential_store as cs
+    stored = {}
+
+    class FakeKeyring:
+        @staticmethod
+        def set_password(service, name, value):
+            stored[name] = value
+
+    monkeypatch.setattr(cs, "_HAS_KEYRING", True)
+    monkeypatch.setattr(cs, "keyring", FakeKeyring)
+    assert cs.set_credential("mlx_api_key", "secret123") is True
+    assert stored["mlx_api_key"] == "secret123"
+
+
+def test_credential_store_no_keyring_set_warns(monkeypatch):
+    from douyin_tools import credential_store as cs
+    monkeypatch.setattr(cs, "_HAS_KEYRING", False)
+    assert cs.set_credential("x", "y") is False
+
+
+def test_get_mlx_api_key_priority_env_first(monkeypatch):
+    # env > keyring > settings
+    from douyin_tools import credential_store as cs
+
+    class FakeKeyring:
+        @staticmethod
+        def get_password(service, name):
+            return "kr_key"
+
+    monkeypatch.setattr(cs, "_HAS_KEYRING", True)
+    monkeypatch.setattr(cs, "keyring", FakeKeyring)
+    assert cs.get_mlx_api_key(env_val="envkey", settings_val="setkey") == "envkey"
+
+
+def test_get_mlx_api_key_priority_keyring_over_settings(monkeypatch):
+    from douyin_tools import credential_store as cs
+
+    class FakeKeyring:
+        @staticmethod
+        def get_password(service, name):
+            return "kr_key"
+
+    monkeypatch.setattr(cs, "_HAS_KEYRING", True)
+    monkeypatch.setattr(cs, "keyring", FakeKeyring)
+    assert cs.get_mlx_api_key(env_val="", settings_val="setkey") == "kr_key"
+
+
+def test_deploy_check_no_personal_paths():
+    # deploy_check 的 check_no_personal_paths 通过
+    import subprocess
+    import sys
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    result = subprocess.run(
+        [sys.executable, os.path.join(repo_root, "scripts", "deploy_check.py")],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"deploy_check failed:\n{result.stdout}\n{result.stderr}"
+    assert '"no_personal_paths": true' in result.stdout
+    assert '"queue_db": true' in result.stdout
+
+
+def test_sync_plugins_no_hardcoded_user_path():
+    # sync_plugins.py 不得硬编码 /Users/dahai
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(repo_root, "sync_plugins.py"), encoding="utf-8") as f:
+        src = f.read()
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "/Users/dahai" not in line, f"sync_plugins hardcoded: {line.strip()}"

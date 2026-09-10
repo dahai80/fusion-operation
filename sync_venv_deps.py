@@ -11,11 +11,13 @@ logger = logging.getLogger(__name__)
 # 等 douyin_tools 依赖 -> 12 个 plugin 加载失败 (No module named 'cv2') -> publish_scheduler
 # 缺失 -> 高峰发布 cron 命中 gate_peak=false -> 实际 0 发布 (2026-08-18 事故根因).
 # 修复: 从共享 venv site-packages 把缺失依赖拷进 agent-studio venv, 幂等可重跑.
-SHARED_VENV = Path(os.environ.get("FUSION_SHARED_VENV", "/Users/dahai/fusion/.venv"))
+# M3-8: 去个人路径化. 默认相对 monorepo 约定结构, env 覆盖.
+_MONOREPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SHARED_VENV = Path(os.environ.get("FUSION_SHARED_VENV", str(_MONOREPO_ROOT / ".venv")))
 AGENT_VENV = Path(
     os.environ.get(
         "FUSION_AGENT_STUDIO_VENV",
-        "/Users/dahai/fusion/fusion-agent-studio/.venv",
+        str(_MONOREPO_ROOT / "fusion-agent-studio" / ".venv"),
     )
 )
 

@@ -14,6 +14,10 @@ CONFIG_FILE = os.environ.get(
     ),
 )
 
+# M3-8 §6.6: 去个人路径化. 默认路径相对仓根, 不再硬编码 /Users/dahai/...
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_OUT = os.path.join(REPO_ROOT, "out")
+
 
 def _load_json_config():
     # 声明式配置层: 用户改 douyin_config.json 即可调整策略, 不改代码.
@@ -113,24 +117,24 @@ MLX_SETTINGS_PATH = os.path.expanduser(
 
 VIDEO_DIR = os.environ.get(
     "DOUYIN_VIDEO_DIR",
-    _cfg("paths", "video_dir", "/Users/dahai/fusion/fusion-operation/out/videos"),
+    _cfg("paths", "video_dir", os.path.join(_DEFAULT_OUT, "videos")),
 )
 AUDIO_DIR = os.environ.get(
     "DOUYIN_AUDIO_DIR",
-    _cfg("paths", "audio_dir", "/Users/dahai/fusion/fusion-operation/out/audio"),
+    _cfg("paths", "audio_dir", os.path.join(_DEFAULT_OUT, "audio")),
 )
 IMAGE_DIR = os.environ.get(
     "DOUYIN_IMAGE_DIR",
-    _cfg("paths", "image_dir", "/Users/dahai/fusion/fusion-operation/out/images"),
+    _cfg("paths", "image_dir", os.path.join(_DEFAULT_OUT, "images")),
 )
 FALLBACK_IMAGE_DIR = os.environ.get(
     "DOUYIN_FALLBACK_IMAGES",
-    _cfg("paths", "fallback_image_dir", "/Users/dahai/video/images/hq"),
+    _cfg("paths", "fallback_image_dir", os.path.join(_DEFAULT_OUT, "fallback_images")),
 )
 
 DOUYIN_PROFILE = os.environ.get(
     "DOUYIN_PROFILE",
-    _cfg("paths", "douyin_profile", "/Users/dahai/video/douyin_profile"),
+    _cfg("paths", "douyin_profile", os.path.join(_DEFAULT_OUT, "douyin_profile")),
 )
 DOUYIN_UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload"
 DOUYIN_MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage"
@@ -139,11 +143,11 @@ DOUYIN_HOME_URL = "https://creator.douyin.com/creator-micro/home"
 DOUYIN_ITEM_LIST_API = "https://creator.douyin.com/aweme/v1/creator/item/list"
 OPS_DATA_DIR = os.environ.get(
     "DOUYIN_OPS_DATA_DIR",
-    _cfg("paths", "ops_data_dir", "/Users/dahai/fusion/fusion-operation/out/ops"),
+    _cfg("paths", "ops_data_dir", os.path.join(_DEFAULT_OUT, "ops")),
 )
 QUEUE_DIR = os.environ.get(
     "DOUYIN_QUEUE_DIR",
-    _cfg("paths", "queue_dir", "/Users/dahai/fusion/fusion-operation/out/queue"),
+    _cfg("paths", "queue_dir", os.path.join(_DEFAULT_OUT, "queue")),
 )
 # lease TTL 单源 (审计 0908 F2 ④): queue_ops dequeue + ops_health stale-inflight 告警同源读.
 # default 1800 覆盖最坏发布耗时 (审计 P0-1); env DOUYIN_LEASE_TTL 可覆盖.
@@ -157,7 +161,7 @@ TOPICS_FILE = os.environ.get(
     _cfg(
         "paths",
         "topics_file",
-        "/Users/dahai/fusion/fusion-operation/out/queue/topics.json",
+        os.path.join(_DEFAULT_OUT, "queue", "topics.json"),
     ),
 )
 
@@ -167,7 +171,7 @@ COMFYUI_OUTPUT_DIR = os.environ.get(
     _cfg(
         "comfyui",
         "output_dir",
-        "/Users/dahai/fusion/fusion-comfyui/ComfyUI/output",
+        os.path.join(os.path.dirname(REPO_ROOT), "fusion-comfyui", "ComfyUI", "output"),
     ),
 )
 # Fusion 节点把音频存到 tempfile.gettempdir()/fusion_comfyui_audio, 且不在 /history outputs 暴露.
@@ -256,8 +260,14 @@ _MLX_KEY_CACHE = {"mtime": 0.0, "key": ""}
 
 
 def _resolve_mlx_api_key():
+    # M3-8: 优先级 env > keyring (credential_store) > settings.json.
     if MLX_API_KEY:
         return MLX_API_KEY
+    # keyring 兜底 (macOS Keychain), 无 keyring 库则返回 ""
+    from .credential_store import get_credential
+    kr_key = get_credential("mlx_api_key", fallback="")
+    if kr_key:
+        return kr_key
     try:
         m = os.path.getmtime(MLX_SETTINGS_PATH)
     except OSError:

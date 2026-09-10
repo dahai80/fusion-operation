@@ -6,6 +6,9 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_DIR = Path(os.path.expanduser("~/.fusion-agent-studio/plugins"))
 
+# M3-8: 去个人路径化. 默认相对本仓根, env 覆盖.
+_REPO_ROOT = Path(os.path.dirname(os.path.abspath(__file__)))
+
 SHIM_TEMPLATE = '''\
 import logging
 import os
@@ -15,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 # daemon 运行在 agent-studio 自己的 .venv, fusion-operation 装在 monorepo 共享 venv.
 # shim import 前把 fusion-operation 源码目录注入 sys.path, 保证 douyin_tools 可 import.
-# 候选顺序: 环境变量 > monorepo 约定路径 > 当前工作目录.
+# 候选顺序: 环境变量 > 仓根 (sync_plugins 生成时注入).
 _FUSION_OP_DIR = (
     os.environ.get("FUSION_OPERATION_DIR")
-    or "/Users/dahai/fusion/fusion-operation"
+    or {repo_root!r}
 )
 if _FUSION_OP_DIR not in sys.path:
     sys.path.insert(0, _FUSION_OP_DIR)
@@ -27,7 +30,7 @@ if _FUSION_OP_DIR not in sys.path:
 from douyin_tools.{mod} import {cls} as _Tool
 
 {cls} = _Tool
-logger.info("douyin plugin shim loaded: {name} -> %s", _Tool.__name__)
+logger.info("douyin plugin shim loaded: {name} -> %s", _Tool.__name__)'''
 '''
 
 
@@ -69,7 +72,7 @@ def sync():
     written = []
     for mod, cls, name in tools:
         path = PLUGIN_DIR / f"douyin_{name}.py"
-        path.write_text(SHIM_TEMPLATE.format(mod=mod, cls=cls, name=name))
+        path.write_text(SHIM_TEMPLATE.format(mod=mod, cls=cls, name=name, repo_root=str(_REPO_ROOT)))
         written.append(name)
     logger.info("sync_plugins wrote %d shims to %s", len(written), PLUGIN_DIR)
     for w in written:

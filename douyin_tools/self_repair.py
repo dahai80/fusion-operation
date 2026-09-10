@@ -9,10 +9,10 @@ from tools.base import BaseTool
 
 from . import config
 from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config, mlx_headers
+from .history_store import load_history
 
 logger = logging.getLogger(__name__)
 
-HISTORY_FILE = os.path.join(OPS_DATA_DIR, "stats_history.jsonl")
 PATTERNS_FILE = os.path.join(OPS_DATA_DIR, "winning_patterns.json")
 BLACKLIST_FILE = os.path.join(OPS_DATA_DIR, "topic_blacklist.json")
 PUBLISHED_DIR = os.path.join(QUEUE_DIR, "published")
@@ -66,7 +66,7 @@ class SelfRepairTool(BaseTool):
         return json.dumps({"error": f"unknown action {action}"})
 
     def _scan(self):
-        rows = self._load_history()
+        rows = load_history()
         if not rows:
             logger.info("self_repair scan: no history")
             return json.dumps({"status": "empty", "candidates": []}, ensure_ascii=False)
@@ -292,23 +292,6 @@ class SelfRepairTool(BaseTool):
         if data.get("losing_patterns"):
             parts.append("避免：" + "、".join(str(x) for x in data["losing_patterns"][:3]))
         return "；".join(parts)
-
-    @staticmethod
-    def _load_history():
-        out = []
-        try:
-            with open(HISTORY_FILE, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        out.append(json.loads(line))
-                    except ValueError:
-                        pass
-        except FileNotFoundError:
-            return out
-        return out
 
     @staticmethod
     def _extract_json(content):

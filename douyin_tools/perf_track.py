@@ -6,10 +6,11 @@ import os
 from tools.base import BaseTool
 
 from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config
+from . import history_store
+from .history_store import latest_per_vid, load_history, prune_history
 
 logger = logging.getLogger(__name__)
 
-HISTORY_FILE = os.path.join(OPS_DATA_DIR, "stats_history.jsonl")
 PUBLISHED_DIR = os.path.join(QUEUE_DIR, "published")
 
 # 分类阈值: 模块级保留 import 时绑定值 (兼容旧测试 test_declarative_config_override 断言模块名).
@@ -66,7 +67,7 @@ class PerfTrackTool(BaseTool):
         items = stats.get("items", []) or []
         snap_at = stats.get("fetched_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         written = 0
-        with open(HISTORY_FILE, "a", encoding="utf-8") as f:
+        with open(history_store.HISTORY_FILE, "a", encoding="utf-8") as f:
             for it in items:
                 vid = it.get("vid", "")
                 if not vid:
@@ -94,44 +95,15 @@ class PerfTrackTool(BaseTool):
                 written += 1
         rank = self._rank_top(items)
         backfilled = self._backfill_published_vid(items)
-        pruned = self._prune_history()
+        cfg = _perf_cfg()
+        cap = int(cfg.get("max_history_per_vid", MAX_HISTORY_PER_VID))
+        threshold = int(cfg.get("prune_threshold", cap * 200))
+        pruned = prune_history(cap, threshold)
         logger.info("snapshot done written=%d snap_at=%s vid_backfill=%d pruned=%d", written, snap_at, backfilled, pruned)
         return json.dumps(
             {"status": "snapshotted", "written": written, "snapshot_at": snap_at, "top": rank, "vid_backfill": backfilled, "pruned": pruned},
             ensure_ascii=False,
         )
-
-    @staticmethod
-    def _prune_history():
-        # 滚动 cap: 总行数超阈值时, 每 vid 只留最新 N 条快照重写.
-        # rank 只取每 vid 最新一条, 老快照无分析价值 -> 压缩防 jsonl 无界膨胀 (修 A3).
-        # 阈值实时读配置 (修 A1): prune_threshold 显式配置优先, 否则 cap*200 兜底.
-        cfg = _perf_cfg()
-        cap = int(cfg.get("max_history_per_vid", MAX_HISTORY_PER_VID))
-        prune_threshold = int(cfg.get("prune_threshold", cap * 200))
-        if not os.path.exists(HISTORY_FILE):
-            return 0
-        rows = PerfTrackTool._load_history()
-        if len(rows) < prune_threshold:
-            return 0
-        by_vid = {}
-        for r in rows:
-            vid = r.get("vid", "")
-            if not vid:
-                continue
-            by_vid.setdefault(vid, []).append(r)
-        kept = []
-        for vid, lst in by_vid.items():
-            # _load_history 保文件顺序 (旧->新), 取尾部最新 N 条.
-            kept.extend(lst[-cap:])
-        tmp_path = HISTORY_FILE + ".pruned"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            for r in kept:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        os.replace(tmp_path, HISTORY_FILE)
-        dropped = len(rows) - len(kept)
-        logger.info("prune_history rows=%d kept=%d dropped=%d per_vid_cap=%d", len(rows), len(kept), dropped, cap)
-        return dropped
 
     @staticmethod
     def _backfill_published_vid(items):
@@ -187,11 +159,11 @@ class PerfTrackTool(BaseTool):
         return n
 
     def _rank(self):
-        rows = self._load_history()
+        rows = load_history()
         if not rows:
             logger.warning("rank: no history")
             return json.dumps({"status": "empty", "ranked": []}, ensure_ascii=False)
-        latest = self._latest_per_vid(rows)
+        latest = latest_per_vid(rows)
         ranked = sorted(latest.values(), key=lambda r: -r.get("plays", 0))
         variant_map = self._load_variant_map()
         classified = []
@@ -292,35 +264,6 @@ class PerfTrackTool(BaseTool):
                 except ValueError:
                     continue
         return None
-
-    @staticmethod
-    def _load_history():
-        out = []
-        try:
-            with open(HISTORY_FILE, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        out.append(json.loads(line))
-                    except ValueError:
-                        pass
-        except FileNotFoundError:
-            return out
-        return out
-
-    @staticmethod
-    def _latest_per_vid(rows):
-        latest = {}
-        for r in rows:
-            vid = r.get("vid", "")
-            if not vid:
-                continue
-            cur = latest.get(vid)
-            if cur is None or r.get("snapshot_at", "") > cur.get("snapshot_at", ""):
-                latest[vid] = r
-        return latest
 
     @staticmethod
     def _load_variant_map():

@@ -6,10 +6,11 @@ import os
 from tools.base import BaseTool
 
 from .config import OPS_DATA_DIR, QUEUE_DIR
+from . import history_store
+from .history_store import append_history, latest_per_vid, load_history
 
 logger = logging.getLogger(__name__)
 
-HISTORY_FILE = os.path.join(OPS_DATA_DIR, "stats_history.jsonl")
 WINNING_FILE = os.path.join(OPS_DATA_DIR, "winning_patterns.json")
 PUBLISHED_DIR = os.path.join(QUEUE_DIR, "published")
 
@@ -47,10 +48,10 @@ class OpsReportTool(BaseTool):
         if not date:
             date = datetime.date.today().strftime("%Y-%m-%d")
         items_for_report = stats.get("items", []) or []
-        self._append_history(stats, date)
+        append_history(stats, date)
         prev = self._load_prev(date)
-        rows = self._load_history()
-        latest = self._latest_per_vid(rows)
+        rows = load_history()
+        latest = latest_per_vid(rows)
         rank_rows = self._merge_rank_rows(items_for_report, latest)
         winning = self._load_winning()
         variant_map = self._load_variant_map()
@@ -245,35 +246,6 @@ class OpsReportTool(BaseTool):
         return f"互动率{ir}"
 
     @staticmethod
-    def _load_history():
-        out = []
-        try:
-            with open(HISTORY_FILE, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        out.append(json.loads(line))
-                    except ValueError:
-                        pass
-        except FileNotFoundError:
-            return out
-        return out
-
-    @staticmethod
-    def _latest_per_vid(rows):
-        latest = {}
-        for r in rows:
-            vid = r.get("vid", "")
-            if not vid:
-                continue
-            cur = latest.get(vid)
-            if cur is None or r.get("snapshot_at", "") > cur.get("snapshot_at", ""):
-                latest[vid] = r
-        return latest
-
-    @staticmethod
     def _load_winning():
         try:
             with open(WINNING_FILE, encoding="utf-8") as f:
@@ -309,34 +281,8 @@ class OpsReportTool(BaseTool):
                 out[vid] = v
         return out
 
-    def _append_history(self, stats, date):
-        items = stats.get("items", []) or []
-        snap = {
-            "date": date,
-            "fetched_at": stats.get("fetched_at", ""),
-            "followers_raw": (stats.get("account", {}) or {}).get("followers_raw"),
-            "total_plays": sum(i.get("plays", 0) for i in items),
-            "total_likes": sum(i.get("likes", 0) for i in items),
-            "total_comments": sum(i.get("comments", 0) for i in items),
-            "item_count": len(items),
-        }
-        os.makedirs(OPS_DATA_DIR, exist_ok=True)
-        with open(HISTORY_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(snap, ensure_ascii=False) + "\n")
-
     def _load_prev(self, current_date):
-        snaps = []
-        try:
-            with open(HISTORY_FILE, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            snaps.append(json.loads(line))
-                        except ValueError:
-                            pass
-        except FileNotFoundError:
-            return None
+        snaps = load_history()
         prevs = [s for s in snaps if s.get("date") != current_date]
         if not prevs:
             return None

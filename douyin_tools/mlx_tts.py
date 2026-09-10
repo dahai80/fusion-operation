@@ -4,14 +4,13 @@ import os
 import time
 import uuid
 
-import httpx
-
 from . import config
 from .config import (
     AUDIO_DIR,
     ensure_dirs,
     mlx_headers,
 )
+from .resilient_http import post_json
 from tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
@@ -58,8 +57,7 @@ class MlxTtsTool(BaseTool):
             "response_format": "wav",
         }
         try:
-            async with httpx.AsyncClient(timeout=config.MLX_TIMEOUT, headers=mlx_headers()) as client:
-                resp = await client.post(url, json=payload)
+            resp = await post_json(url, payload, service="mlx")
             if resp.status_code != 200:
                 logger.warning("mlx tts http %s: %s", resp.status_code, resp.text[:200])
                 return ""

@@ -89,6 +89,12 @@
     "published_retention_days": 90,
     "reconcile_on_startup": true
   },
+  "resilience": {
+    "max_retries": 3,
+    "backoff_base_sec": 1,
+    "circuit_threshold": 5,
+    "circuit_cooldown_sec": 60
+  },
   "video": {
     "fps": 24,
     "width": 1080,

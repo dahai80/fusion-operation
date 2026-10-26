@@ -196,7 +196,7 @@ fusion-studio 启动时 `UpstreamServiceManager.ensureCriticalRunning()` 按依�
 
 ## 声明式配置（改配置不改代码）
 
-业务参数集中在根目录 `douyin_config.json`，工具启动时读取。**优先级：环境变量 > JSON 配置 > 硬编码默认**，三级回退保证向后兼容。
+业务参数集中在根目录 `douyin_config.json`，工具启动时读取。**优先级：环境变量 > JSON 配置 > 硬编码默认**，三级回退保证向后兼容。`paths.*` 一律写**相对仓根路径**（`out/videos`）或 `~/` 前缀（`~/video/douyin_profile`）：`config.py` 统一 `_resolve_path` 解析（`~` 展开到当前用户 home，相对路径按仓根 join），禁止绝对个人路径（CI runner 无本地 home，绝对路径 makedirs 直接 PermissionError；`deploy_check.py` + 回归测试双门禁拦截）。
 
 可配置项：
 

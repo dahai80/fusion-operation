@@ -8,7 +8,7 @@
   "comfyui": {
     "base": "http://127.0.0.1:11445",
     "timeout": 300,
-    "output_dir": "/Users/dahai/fusion/fusion-comfyui/ComfyUI/output",
+    "output_dir": "../fusion-comfyui/ComfyUI/output",
     "image_model": "flux2-klein-4b.safetensors",
     "tts_model": "mlx-community/Kokoro-82M-bf16",
     "tts_backend": "http",
@@ -21,14 +21,14 @@
     "settings_path": "~/.fusion-mlx/settings.json"
   },
   "paths": {
-    "video_dir": "/Users/dahai/fusion/fusion-operation/out/videos",
-    "audio_dir": "/Users/dahai/fusion/fusion-operation/out/audio",
-    "image_dir": "/Users/dahai/fusion/fusion-operation/out/images",
-    "fallback_image_dir": "/Users/dahai/video/images/hq",
-    "ops_data_dir": "/Users/dahai/fusion/fusion-operation/out/ops",
-    "queue_dir": "/Users/dahai/fusion/fusion-operation/out/queue",
-    "topics_file": "/Users/dahai/fusion/fusion-operation/out/queue/topics.json",
-    "douyin_profile": "/Users/dahai/video/douyin_profile"
+    "video_dir": "out/videos",
+    "audio_dir": "out/audio",
+    "image_dir": "out/images",
+    "fallback_image_dir": "~/video/images/hq",
+    "ops_data_dir": "out/ops",
+    "queue_dir": "out/queue",
+    "topics_file": "out/queue/topics.json",
+    "douyin_profile": "~/video/douyin_profile"
   },
   "agent_studio": {
     "socket": "/tmp/fusion-studio.sock",

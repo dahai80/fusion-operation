@@ -3460,6 +3460,22 @@ def test_config_paths_are_repo_relative():
         assert val.startswith(expected_base), f"{name}={val} not under REPO_ROOT/out={expected_base}"
 
 
+def test_douyin_config_json_no_personal_paths():
+    # issue #20 CI 根因回归: douyin_config.json 路径曾绝对化 (/Users/dahai/...),
+    # runner 无该 home, ensure_dirs/profile_lock makedirs PermissionError 44 用例挂.
+    # JSON 路径必须相对仓根 (~ 开头表 home) 才能在任意机器跑通.
+    from douyin_tools import config as cmod
+
+    with open(cmod.CONFIG_FILE, encoding="utf-8") as f:
+        raw = f.read()
+    assert "/Users/" not in raw, "douyin_config.json has absolute personal path"
+    cfg = json.loads(raw)
+    for key, val in cfg.get("paths", {}).items():
+        assert os.path.isabs(val) is False or val.startswith("~"), (
+            f"paths.{key}={val} must be repo-relative or ~/ prefixed"
+        )
+
+
 def test_credential_store_get_with_fallback(monkeypatch):
     # keyring 不可用时 fallback 生效
     from douyin_tools import credential_store as cs

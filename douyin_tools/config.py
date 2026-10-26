@@ -78,6 +78,15 @@ def _cfg(section, key, default):
     return _JSON_CFG.get(section, {}).get(key, default)
 
 
+def _resolve_path(p):
+    # 路径统一解析: ~ 展开到当前用户 home, 相对路径按仓根解析.
+    # CI runner 无个人 home, JSON 用相对/~/ 路径才能在任意机器跑通 (issue #20 CI 根因).
+    p = os.path.expanduser(p)
+    if not os.path.isabs(p):
+        p = os.path.join(REPO_ROOT, p)
+    return p
+
+
 def get_json_config():
     # 暴露原始 JSON 配置供工具读取非 config.py 常量的业务参数
     # (hook_variants / peak_windows / 阈值等, 上游 issue #125 落地后映射进 manifest tool.config).
@@ -115,39 +124,53 @@ MLX_SETTINGS_PATH = os.path.expanduser(
     )
 )
 
-VIDEO_DIR = os.environ.get(
-    "DOUYIN_VIDEO_DIR",
-    _cfg("paths", "video_dir", os.path.join(_DEFAULT_OUT, "videos")),
+VIDEO_DIR = _resolve_path(
+    os.environ.get(
+        "DOUYIN_VIDEO_DIR",
+        _cfg("paths", "video_dir", os.path.join(_DEFAULT_OUT, "videos")),
+    )
 )
-AUDIO_DIR = os.environ.get(
-    "DOUYIN_AUDIO_DIR",
-    _cfg("paths", "audio_dir", os.path.join(_DEFAULT_OUT, "audio")),
+AUDIO_DIR = _resolve_path(
+    os.environ.get(
+        "DOUYIN_AUDIO_DIR",
+        _cfg("paths", "audio_dir", os.path.join(_DEFAULT_OUT, "audio")),
+    )
 )
-IMAGE_DIR = os.environ.get(
-    "DOUYIN_IMAGE_DIR",
-    _cfg("paths", "image_dir", os.path.join(_DEFAULT_OUT, "images")),
+IMAGE_DIR = _resolve_path(
+    os.environ.get(
+        "DOUYIN_IMAGE_DIR",
+        _cfg("paths", "image_dir", os.path.join(_DEFAULT_OUT, "images")),
+    )
 )
-FALLBACK_IMAGE_DIR = os.environ.get(
-    "DOUYIN_FALLBACK_IMAGES",
-    _cfg("paths", "fallback_image_dir", os.path.join(_DEFAULT_OUT, "fallback_images")),
+FALLBACK_IMAGE_DIR = _resolve_path(
+    os.environ.get(
+        "DOUYIN_FALLBACK_IMAGES",
+        _cfg("paths", "fallback_image_dir", os.path.join(_DEFAULT_OUT, "fallback_images")),
+    )
 )
 
-DOUYIN_PROFILE = os.environ.get(
-    "DOUYIN_PROFILE",
-    _cfg("paths", "douyin_profile", os.path.join(_DEFAULT_OUT, "douyin_profile")),
+DOUYIN_PROFILE = _resolve_path(
+    os.environ.get(
+        "DOUYIN_PROFILE",
+        _cfg("paths", "douyin_profile", os.path.join(_DEFAULT_OUT, "douyin_profile")),
+    )
 )
 DOUYIN_UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload"
 DOUYIN_MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage"
 DOUYIN_COMMENT_URL = "https://creator.douyin.com/creator-micro/interactive/comment"
 DOUYIN_HOME_URL = "https://creator.douyin.com/creator-micro/home"
 DOUYIN_ITEM_LIST_API = "https://creator.douyin.com/aweme/v1/creator/item/list"
-OPS_DATA_DIR = os.environ.get(
-    "DOUYIN_OPS_DATA_DIR",
-    _cfg("paths", "ops_data_dir", os.path.join(_DEFAULT_OUT, "ops")),
+OPS_DATA_DIR = _resolve_path(
+    os.environ.get(
+        "DOUYIN_OPS_DATA_DIR",
+        _cfg("paths", "ops_data_dir", os.path.join(_DEFAULT_OUT, "ops")),
+    )
 )
-QUEUE_DIR = os.environ.get(
-    "DOUYIN_QUEUE_DIR",
-    _cfg("paths", "queue_dir", os.path.join(_DEFAULT_OUT, "queue")),
+QUEUE_DIR = _resolve_path(
+    os.environ.get(
+        "DOUYIN_QUEUE_DIR",
+        _cfg("paths", "queue_dir", os.path.join(_DEFAULT_OUT, "queue")),
+    )
 )
 # lease TTL 单源 (审计 0908 F2 ④): queue_ops dequeue + ops_health stale-inflight 告警同源读.
 # default 1800 覆盖最坏发布耗时 (审计 P0-1); env DOUYIN_LEASE_TTL 可覆盖.
@@ -156,23 +179,27 @@ AGENT_STUDIO_SOCKET = os.environ.get(
     "FUSION_STUDIO_SOCKET",
     _cfg("agent_studio", "socket", "/tmp/fusion-studio.sock"),
 )
-TOPICS_FILE = os.environ.get(
-    "DOUYIN_TOPICS_FILE",
-    _cfg(
-        "paths",
-        "topics_file",
-        os.path.join(_DEFAULT_OUT, "queue", "topics.json"),
-    ),
+TOPICS_FILE = _resolve_path(
+    os.environ.get(
+        "DOUYIN_TOPICS_FILE",
+        _cfg(
+            "paths",
+            "topics_file",
+            os.path.join(_DEFAULT_OUT, "queue", "topics.json"),
+        ),
+    )
 )
 
 # ComfyUI output 目录 (folder_paths.get_output_directory), /history 返回 filename+subfolder.
-COMFYUI_OUTPUT_DIR = os.environ.get(
-    "FUSION_COMFYUI_OUTPUT_DIR",
-    _cfg(
-        "comfyui",
-        "output_dir",
-        os.path.join(os.path.dirname(REPO_ROOT), "fusion-comfyui", "ComfyUI", "output"),
-    ),
+COMFYUI_OUTPUT_DIR = _resolve_path(
+    os.environ.get(
+        "FUSION_COMFYUI_OUTPUT_DIR",
+        _cfg(
+            "comfyui",
+            "output_dir",
+            os.path.join(os.path.dirname(REPO_ROOT), "fusion-comfyui", "ComfyUI", "output"),
+        ),
+    )
 )
 # Fusion 节点把音频存到 tempfile.gettempdir()/fusion_comfyui_audio, 且不在 /history outputs 暴露.
 # 业务层按 filename_prefix 在此目录回找. (上游 gap: 音频应走 ComfyUI output dir 进 /history)

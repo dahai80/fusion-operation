@@ -15,13 +15,16 @@ logger = logging.getLogger("deploy_check")
 
 
 def check_no_personal_paths():
-    # 扫 douyin_tools/ + scripts/ + sync_*.py 确认无 /Users/dahai 硬编码 (注释除外).
+    # 扫 douyin_tools/ + scripts/ + sync_*.py + douyin_config.json 确认无 /Users/dahai
+    # 硬编码 (注释除外). JSON 也要扫: issue #20 CI 根因就是 JSON 路径绝对化在 runner 上
+    # PermissionError, 旧 gate 只扫 .py 漏掉.
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     checks = [
         "douyin_tools/config.py",
         "douyin_tools/comfyui_client.py",
         "sync_plugins.py",
         "sync_venv_deps.py",
+        "douyin_config.json",
     ]
     failures = []
     for rel in checks:

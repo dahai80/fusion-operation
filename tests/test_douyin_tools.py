@@ -2325,6 +2325,7 @@ def test_ops_health_file_alerts(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PENDING_DIR", str(qdir / "pending"), raising=False)
     monkeypatch.setattr(mod, "PUBLISHED_DIR", str(qdir / "published"), raising=False)
     monkeypatch.setattr(mod, "PATTERNS_FILE", str(odir / "winning_patterns.json"), raising=False)
+    monkeypatch.setattr(mod, "PENDING_PATTERNS_FILE", str(odir / "pending_patterns.json"), raising=False)
     monkeypatch.setattr(mod, "BLACKLIST_FILE", str(odir / "topic_blacklist.json"), raising=False)
     monkeypatch.setattr(mod, "REPLIED_FILE", str(odir / "replied.json"), raising=False)
     monkeypatch.setattr(history_store, "HISTORY_FILE", str(odir / "stats_history.jsonl"), raising=False)

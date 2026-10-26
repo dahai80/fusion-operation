@@ -68,7 +68,15 @@ class SelfRepairTool(BaseTool):
         rows = load_history()
         if not rows:
             logger.info("self_repair scan: no history")
-            return json.dumps({"status": "empty", "candidates": []}, ensure_ascii=False)
+            # 空历史也必须带字符串布尔键: repair_publish gate `has_candidate == true`
+            # 依赖此键, 缺键 gate 左侧变量为空直接断 (CI 无运营数据即触发, issue #20).
+            return json.dumps({
+                "status": "empty",
+                "candidates": [],
+                "count": 0,
+                "has_candidate": "false",
+                "first_vid": "",
+            }, ensure_ascii=False)
         latest = {}
         for r in rows:
             v = r.get("vid", "")

@@ -1793,13 +1793,15 @@ def test_auto_publish_graph_structure():
     assert ("gate_peak", "end", "false") in edges, "off-peak must exit to end"
 
 
-def test_mlx_headers_fusion_route():
+def test_mlx_headers_fusion_route(monkeypatch):
     # fusion-mlx v0.7.0 (#349) 强制 X-Fusion-Route 头, 缺失即 403 missing_route.
     # mlx_headers 必须注入 X-Fusion-Route: fusion-operation (provenance-only, monorepo 约定).
-    from douyin_tools.config import mlx_headers
-    h = mlx_headers()
+    # key 注入 mock: CI runner 无 keychain/env/settings.json, 真实解析必然无 key.
+    from douyin_tools import config as cmod
+    monkeypatch.setattr(cmod, "_resolve_mlx_api_key", lambda: "ci-test-key")
+    h = cmod.mlx_headers()
     assert h.get("X-Fusion-Route") == "fusion-operation"
-    # 鉴权头仍在 (settings.json 回退 dahai168)
+    # 鉴权头仍在
     assert "Authorization" in h or "x-api-key" in h
 
 

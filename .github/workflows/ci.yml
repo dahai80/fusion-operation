@@ -12,6 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # fusion-operation 是业务层: douyin_tools 依赖 agent-studio 的 tools/registry+base
+      # (BaseTool 契约) 与 fusion-harness. 单仓 CI 无 monorepo 共享 venv, 需浅克隆安装.
+      - name: Checkout monorepo deps (fusion-harness + fusion-agent-studio)
+        run: |
+          git clone --depth 1 https://github.com/dahai80/fusion-harness.git /tmp/fusion-harness
+          git clone --depth 1 https://github.com/dahai80/fusion-agent-studio.git /tmp/fusion-agent-studio
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -20,8 +27,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio pytest-mock httpx pyyaml
-          pip install keyring || true
+          pip install pytest pytest-asyncio pytest-mock httpx pyyaml keyring numpy Pillow opencv-python-headless
+          pip install -e /tmp/fusion-harness --no-deps
+          pip install -e /tmp/fusion-agent-studio
 
       - name: Run tests
         run: |

@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cd /Users/dahai/fusion && source .venv/bin/activate && cd fusion-operation
 pip install -e ".[test]"
 python -m playwright install chromium       # 首次
-pytest tests/ -q                             # 253 用例
+pytest tests/ -q                             # 254 用例
 pytest tests/test_douyin_tools.py::test_publish_dry_run_flow -v    # 单测
 unset FUSION_MLX_API_KEY
 python run_graph.py graphs/douyin_auto_publish.json true   # 单条 dry_run 验证（统一发布 Graph）
@@ -23,7 +23,7 @@ python run_graph.py graphs/douyin_queue_publish.json true --loop 2              
 ./deploy.sh                                  # 统一部署（sync 全链 → daemon 重启 → 校验，任一步失败 exit 1）
 ```
 
-CI：`.github/workflows/ci.yml`（macos-14，push/PR master 跑 pytest + deploy_check）。单仓 CI 无 monorepo 共享 venv，workflow 内浅克隆 `fusion-harness` + `fusion-agent-studio` 安装（`douyin_tools` 依赖 agent-studio 的 `tools.base`/`tools.registry`）。
+CI：`.github/workflows/ci.yml`（macos-14，push/PR master 跑 pytest + deploy_check）。单仓 CI 无 monorepo 共享 venv，workflow 内浅克隆 `fusion-core` + `fusion-harness` + `fusion-agent-studio` 安装（`douyin_tools` 依赖 agent-studio 的 `tools.base`/`tools.registry`；config 单点 key 解析依赖 fusion-core，issue #22）。
 
 ### 架构
 
@@ -61,7 +61,7 @@ cron 节奏（daemon cron.db，8 job）：4 发布（09:05/11:05/14:05/18:05 `do
 - Playwright **必须用 async API**（`async_playwright`）：AgentRuntime 在 asyncio 循环内调用工具，sync API 会报错。
 - **扁平插值**：AgentRuntime interpolate 只支持整段 `{{var}}`，不支持 JSON 路径。工具接收整段 `{{script_json}}`，由 `script_helpers` 抽切片；列表经 output_mapping 后以 Python repr 插值，`_parse_list` 系用 `ast.literal_eval` 回退。
 - **字符串布尔**：ConditionEngine 是字符串比较，工具输出的布尔字段必须是 `"true"`/`"false"`（同 `has_stock`/`in_peak`/`enough` 模式）。
-- **鉴权**：`config.mlx_headers()` 带 `X-Fusion-Route: fusion-operation`（mlx v0.7.0+ 缺失即 403）；key 解析 keychain > env > settings.json。shell 里 stale `FUSION_MLX_API_KEY` 会导致 401，本地跑 runner 需 `unset`；daemon/comfyui 的 start.sh 启动时已统一 unset。经 gateway 与直连 mlx 是两套 key，不可混用。
+- **鉴权**：`config.mlx_headers()` 带 `X-Fusion-Route: fusion-operation`（mlx v0.7.0+ 缺失即 403）；key 解析走 fusion_core.config 单点（issue #22）：env（`FUSION_CLIENT_KEY` > `FUSION_MLX_API_KEY` > `MLX_API_KEY`）> keychain > settings.json，`FUSION_PROFILE=prod` 全链空才 RuntimeError。shell 里 stale `FUSION_MLX_API_KEY` 会导致 401，本地跑 runner 需 `unset`；daemon/comfyui 的 start.sh 启动时已统一 unset。经 gateway 与直连 mlx 是两套 key，不可混用。
 - 抖音登录态：持久化 profile `~/video/douyin_profile`；同 profile Chrome 独占锁会 TargetClosedError，`douyin_publish` 有自清残留重试。
 - **声明式配置**：业务参数集中在 `douyin_config.json`，`config.py` 三级回退（env > JSON > 硬编码默认），带 mtime 失效缓存（daemon 长进程改 JSON 不重启即生效）。自定义路径 `DOUYIN_CONFIG_FILE`。`paths.*` 必须相对仓根或 `~/` 前缀（`_resolve_path` 统一解析，禁绝对个人路径——CI runner 无本地 home，`deploy_check.py` + 回归测试双门禁拦截）。
 - 产物全部落 `out/`（.gitignore）；运营数据 `out/ops/`，队列 `out/queue/`（SQLite 权威 + 目录投影）。
@@ -69,7 +69,7 @@ cron 节奏（daemon cron.db，8 job）：4 发布（09:05/11:05/14:05/18:05 `do
 
 ### 验证状态（当前快照）
 
-- 253 单测全绿；CI 门禁在 master push/PR 生效（2026-10-26 起 master 绿，issue #20 已闭）。
+- 254 单测全绿；CI 门禁在 master push/PR 生效（2026-10-26 起 master 绿，issue #20/#21/#22 已闭）。
 - 生产 daemon launchd KeepAlive（mlx/daemon/comfyui 三服务均 launchd 持久化），56 tools 0 failed_plugins，8 cron job 绑定正确。
 - **两类验证不可混用**：手动跑通一次 ≠ cron 持续运行。判断自动化是否真在跑用 `ops_health` 工具每日巡检 + `cron.list_executions` 实证 + 关键文件 mtime。
 - 详细历史验证记录与根因分析：`docs/verification-log.md`。

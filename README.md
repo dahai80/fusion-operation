@@ -54,7 +54,7 @@ pip install -e ".[test]"
 python -m playwright install chromium     # 首次需安装浏览器
 ```
 
-依赖：httpx, playwright, opencv-python, Pillow, numpy, edge-tts。
+依赖：httpx, playwright, opencv-python-headless, Pillow, numpy, edge-tts, fusion-core。
 LLM 推理依赖 fusion-mlx：`~/claude-home/fusion-mlx/start.sh start`。
 
 ## 认证

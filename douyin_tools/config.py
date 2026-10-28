@@ -4,6 +4,8 @@ import os
 
 import httpx
 
+from fusion_core.config import client_key, profile, resolve_api_key
+
 logger = logging.getLogger(__name__)
 
 CONFIG_FILE = os.environ.get(
@@ -116,7 +118,6 @@ def get_json_config():
 # ---------------------------------------------------------------------------
 
 # --- 进程生命周期稳定常量 (import 时快照, 改需重启) ---
-MLX_API_KEY = os.environ.get("FUSION_MLX_API_KEY", "")
 MLX_SETTINGS_PATH = os.path.expanduser(
     os.environ.get(
         "FUSION_MLX_SETTINGS",
@@ -281,41 +282,34 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# settings.json api_key mtime 缓存: key 几乎不变, 每条造片链多次 mlx_headers() 调用
-# 每次盘读 open+json.load 纯浪费. mtime 不变复用缓存, 变了才重读.
-_MLX_KEY_CACHE = {"mtime": 0.0, "key": ""}
-
-
-def _resolve_mlx_api_key():
-    # M3-8: 优先级 env > keyring (credential_store) > settings.json.
-    if MLX_API_KEY:
-        return MLX_API_KEY
-    # keyring 兜底 (macOS Keychain), 无 keyring 库则返回 ""
+# issue #22: 单点 key 解析迁 fusion_core.config (client_key/resolve_api_key).
+# keyring 是本仓凭据存储层 (M3-8) 非解析策略, 保留在解析链内.
+def _mlx_api_key():
+    # 优先级 env (fusion-core client_key: FUSION_CLIENT_KEY > FUSION_MLX_API_KEY > MLX_API_KEY)
+    # > keyring > settings.json (fusion-core resolve_api_key, mtime 缓存).
+    # prod (FUSION_PROFILE=prod) 全链空才 RuntimeError; 有 keyring/settings 兜底不 raise.
+    try:
+        key = client_key()
+    except RuntimeError:
+        key = ""
+    if key:
+        return key
     from .credential_store import get_credential
     kr_key = get_credential("mlx_api_key", fallback="")
     if kr_key:
         return kr_key
-    try:
-        m = os.path.getmtime(MLX_SETTINGS_PATH)
-    except OSError:
-        return _MLX_KEY_CACHE["key"]
-    if m == _MLX_KEY_CACHE["mtime"] and _MLX_KEY_CACHE["key"]:
-        return _MLX_KEY_CACHE["key"]
-    try:
-        with open(MLX_SETTINGS_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        key = data.get("auth", {}).get("api_key", "")
-        if key:
-            _MLX_KEY_CACHE["mtime"] = m
-            _MLX_KEY_CACHE["key"] = key
-            return key
-    except Exception as e:
-        logger.debug("read mlx settings api_key failed: %s", e)
+    key = resolve_api_key(env_var="FUSION_CLIENT_KEY", settings_path=MLX_SETTINGS_PATH)
+    if key:
+        return key
+    if profile() == "prod":
+        raise RuntimeError(
+            "FUSION_CLIENT_KEY not set — obtain from gateway admin API, see architecture/config-conventions.md"
+        )
     return ""
 
 
 def mlx_headers():
-    key = _resolve_mlx_api_key()
+    key = _mlx_api_key()
     if key:
         return {
             "Authorization": f"Bearer {key}",

@@ -10,10 +10,11 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx",
     "playwright",
-    "opencv-python",
+    "opencv-python-headless>=4.10.0",
     "Pillow",
     "numpy",
     "edge-tts",
+    "fusion-core",
 ]
 
 [project.optional-dependencies]

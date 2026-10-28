@@ -1798,7 +1798,7 @@ def test_mlx_headers_fusion_route(monkeypatch):
     # mlx_headers 必须注入 X-Fusion-Route: fusion-operation (provenance-only, monorepo 约定).
     # key 注入 mock: CI runner 无 keychain/env/settings.json, 真实解析必然无 key.
     from douyin_tools import config as cmod
-    monkeypatch.setattr(cmod, "_resolve_mlx_api_key", lambda: "ci-test-key")
+    monkeypatch.setattr(cmod, "_mlx_api_key", lambda: "ci-test-key")
     h = cmod.mlx_headers()
     assert h.get("X-Fusion-Route") == "fusion-operation"
     # 鉴权头仍在
@@ -3476,6 +3476,26 @@ def test_douyin_config_json_no_personal_paths():
         assert os.path.isabs(val) is False or val.startswith("~"), (
             f"paths.{key}={val} must be repo-relative or ~/ prefixed"
         )
+
+
+def test_mlx_api_key_dev_empty_prod_raises(monkeypatch):
+    # issue #22 契约: dev 全链无 key = "" (匿名+warning), FUSION_PROFILE=prod 全链无 key = RuntimeError.
+    from douyin_tools import config as cmod
+
+    monkeypatch.setattr(cmod, "client_key", lambda: "")
+    monkeypatch.setattr(cmod, "resolve_api_key", lambda **_: "")
+    monkeypatch.setattr(cmod, "profile", lambda: "dev")
+    import douyin_tools.credential_store as cs
+    monkeypatch.setattr(cs, "get_credential", lambda *a, **k: "")
+    assert cmod._mlx_api_key() == ""
+
+    monkeypatch.setattr(cmod, "profile", lambda: "prod")
+    try:
+        cmod._mlx_api_key()
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised, "prod missing key must raise RuntimeError"
 
 
 def test_credential_store_get_with_fallback(monkeypatch):

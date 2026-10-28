@@ -68,9 +68,9 @@ def check_paths_writable():
 
 def check_credential_source():
     # 验证 mlx api key 可解析 (不打印 key 本身).
-    from douyin_tools.config import _resolve_mlx_api_key
+    from douyin_tools.config import _mlx_api_key
 
-    key = _resolve_mlx_api_key()
+    key = _mlx_api_key()
     if key:
         logger.info("OK: mlx api key resolved (source: env/keyring/settings)")
         return True

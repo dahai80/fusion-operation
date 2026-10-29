@@ -51,7 +51,7 @@ if [ "$INFLIGHT_CHECK" != "0" ]; then
 fi
 log "inflight=0, 安全重启"
 
-log "5/5 daemon 重启 (env -u FUSION_MLX_API_KEY 走 settings.json 回退)"
+log "5/5 daemon 重启 (start.sh 统一 unset client key env, 走 settings.json 回退)"
 if launchctl list 2>/dev/null | grep -q "com.fusion-agent-studio.server"; then
     log "launchd 管控中, uninstall+install 重载 plugin"
     "$DAEMON_SH" uninstall-launchd >/dev/null 2>&1 || true

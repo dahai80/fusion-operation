@@ -74,7 +74,7 @@ def check_credential_source():
     if key:
         logger.info("OK: mlx api key resolved (source: env/keyring/settings)")
         return True
-    logger.warning("WARN: mlx api key not found (env FUSION_MLX_API_KEY / keyring / settings.json)")
+    logger.warning("WARN: mlx api key not found (env FUSION_CLIENT_KEY / keyring / settings.json)")
     return True  # warning only, deploy may proceed (mlx may be unauth)
 
 

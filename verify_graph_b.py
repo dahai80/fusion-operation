@@ -61,7 +61,7 @@ async def collect(runtime, graph, label):
 
 
 async def main():
-    os.environ.pop("FUSION_MLX_API_KEY", None)
+    os.environ.pop("FUSION_CLIENT_KEY", None)  # issue #23: 只清 canonical 名, 别名链归 fusion-core
     registry = create_douyin_registry()
     logger.info("registry tools=%d", registry.count)
 

@@ -16,7 +16,7 @@ logger = logging.getLogger("verify_graph_b_real")
 
 
 async def main():
-    os.environ.pop("FUSION_MLX_API_KEY", None)
+    os.environ.pop("FUSION_CLIENT_KEY", None)  # issue #23: 只清 canonical 名, 别名链归 fusion-core
     fetcher = DouyinFetchCommentsTool()
     drafter = MlxReplyDraftTool()
     replier = DouyinReplyTool()

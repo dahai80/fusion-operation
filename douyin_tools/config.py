@@ -104,7 +104,7 @@ def get_json_config():
 #   douyin_config.json + README 注明. 这些值运行中变更会损坏文件句柄/编码管道, 不应动态.
 #   -> VIDEO_DIR/AUDIO_DIR/IMAGE_DIR/FALLBACK_IMAGE_DIR/DOUYIN_PROFILE/OPS_DATA_DIR/
 #      QUEUE_DIR/TOPICS_FILE/COMFYUI_OUTPUT_DIR/COMFYUI_AUDIO_TEMP_DIR/AGENT_STUDIO_SOCKET/
-#      FPS/W/H/FONT_PATH/MLX_SETTINGS_PATH/MLX_API_KEY/CELESTIAL_TERMS/DOUYIN_*_URL
+#      FPS/W/H/FONT_PATH/MLX_SETTINGS_PATH/CELESTIAL_TERMS/DOUYIN_*_URL
 #
 # [动态生效] 模型 ID/服务端点/超时: daemon 长进程改 JSON 立即生效, 是 H5 核心.
 #   用模块级 __getattr__ 动态属性: 工具调用点用 `config.MLX_BASE` (属性访问) 触发实时读取,
@@ -285,7 +285,7 @@ def __getattr__(name):
 # issue #22: 单点 key 解析迁 fusion_core.config (client_key/resolve_api_key).
 # keyring 是本仓凭据存储层 (M3-8) 非解析策略, 保留在解析链内.
 def _mlx_api_key():
-    # 优先级 env (fusion-core client_key: FUSION_CLIENT_KEY > FUSION_MLX_API_KEY > MLX_API_KEY)
+    # 优先级 env (fusion-core client_key, canonical FUSION_CLIENT_KEY + fusion-core 内迁移期别名链)
     # > keyring > settings.json (fusion-core resolve_api_key, mtime 缓存).
     # prod (FUSION_PROFILE=prod) 全链空才 RuntimeError; 有 keyring/settings 兜底不 raise.
     try:
@@ -330,7 +330,7 @@ def mlx_health():
     except Exception as e:
         return {"ok": False, "reason": f"unreachable: {e}", "http": 0, "model_count": 0}
     if r.status_code == 401:
-        return {"ok": False, "reason": "auth 401 (stale FUSION_MLX_API_KEY? unset env 重启 daemon)", "http": 401, "model_count": 0}
+        return {"ok": False, "reason": "auth 401 (stale FUSION_CLIENT_KEY? unset env 重启 daemon)", "http": 401, "model_count": 0}
     if r.status_code == 403:
         return {"ok": False, "reason": "forbidden 403 (X-Fusion-Route 缺失?)", "http": 403, "model_count": 0}
     if r.status_code != 200:

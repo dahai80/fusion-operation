@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fusion-operation"
-version = "0.1.1"
+version = "0.1.2"
 description = "Fusion 抖音吸粉运营：基于 fusion-agent-studio DAG + fusion-mlx 的可编排自动化"
 requires-python = ">=3.11"
 dependencies = [

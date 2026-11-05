@@ -200,12 +200,13 @@ class OpsHealthTool(BaseTool):
         return out
 
     async def _cron_health(self, days):
-        from agent_runtime.sdk.client import AgentClient
-        client = AgentClient(socket_path=AGENT_STUDIO_SOCKET)
+        from douyin_tools.rpc_auth import authed_call
         # 审计 P2-9: client.call 无 timeout, daemon hang (非 down) -> 无限阻塞 -> ops_health 卡死无法报警.
-        # 加 asyncio.wait_for 10s 预算.
+        # 加 asyncio.wait_for 10s 预算. #326 daemon UDS auth enforcement -> authed_call 注入 _auth JWT.
         try:
-            res = await asyncio.wait_for(client.call("cron.list", {}), timeout=10)
+            res = await asyncio.wait_for(
+                authed_call("cron.list", {}, AGENT_STUDIO_SOCKET), timeout=10
+            )
         except asyncio.TimeoutError:
             raise RuntimeError("cron.list timed out >10s (daemon hang?)")
         if res.get("error"):
@@ -220,7 +221,7 @@ class OpsHealthTool(BaseTool):
             runs = []
             try:
                 er = await asyncio.wait_for(
-                    client.call("cron.list_executions", {"job_id": jid, "limit": 50}), timeout=10
+                    authed_call("cron.list_executions", {"job_id": jid, "limit": 50}, AGENT_STUDIO_SOCKET), timeout=10
                 )
                 runs = er.get("executions", []) or []
             except (Exception, asyncio.TimeoutError) as e:

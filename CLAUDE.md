@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cd /Users/dahai/fusion && source .venv/bin/activate && cd fusion-operation
 pip install -e ".[test]"
 python -m playwright install chromium       # 首次
-pytest tests/ -q                             # 254 用例
+pytest tests/ -q                             # 263 用例
 pytest tests/test_douyin_tools.py::test_publish_dry_run_flow -v    # 单测
 unset FUSION_MLX_API_KEY
 python run_graph.py graphs/douyin_auto_publish.json true   # 单条 dry_run 验证（统一发布 Graph）
@@ -38,6 +38,7 @@ CI：`.github/workflows/ci.yml`（macos-14，push/PR master 跑 pytest + deploy_
 - `graphs/`：7 个运营 DAG（auto_publish 统一发布+无库存自动补货回环 / comment_reply(+winner) / batch_produce / queue_publish / evolve / repair_publish）+ 5 个补货 step mini-graph（`douyin_step_*.json`，M3-2 拆解用）。
 - `restock_chain.py`：补货 5 步 DAG 声明（script→image/tts→compose→enqueue），单环节失败只重试该环节。
 - `run_graph.py`：DAG runner，RPC 优先（agent-studio daemon）本地回退，`--loop N` 批量/日上限。
+- `web_api.py`（issue #24）：REST surface（11431，port-registry: fusion-operation）——health/queue/scheduler/graphs + POST /run 异步执行（后台 task + 内存 run 注册表），graph 执行委托 run_graph 同路。写端点 Bearer = client key；daemon RPC 需 `_auth` JWT（#326），`douyin_tools/rpc_auth.py` 用静态 module key 换 JWT（env `FUSION_AGENT_STUDIO_API_KEY` > `~/.fusion-agent-studio/web_module_key`，注意 `~/.fusion-agent-studio/env.local` 同名变量覆盖 start.sh export，两处不一致 → `invalid apikey: key_not_found`）。UI 控制面板留 fusion-web-shell 模块化阶段。
 
 ### M3 生产化层（2026-10 落地，commit m3-5..m3-9）
 

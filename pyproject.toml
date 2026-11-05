@@ -14,6 +14,8 @@ dependencies = [
     "Pillow",
     "numpy",
     "edge-tts",
+    "fastapi",
+    "uvicorn",
     "fusion-core",
 ]
 

@@ -68,10 +68,31 @@ fusion-mlx 启用 api_key 鉴权时，工具通过 `config.mlx_headers()` 取 ke
 ## 构建/测试
 
 ```bash
-pytest tests/ -q                # 35 个用例全绿
+pytest tests/ -q                # 263 个用例全绿
 pytest tests/test_douyin_tools.py::test_publish_dry_run_flow -v
 ruff check .                    # 如配置
 ```
+
+## REST API（issue #24）
+
+`web_api.py` — FastAPI 薄层，graph 执行委托 agent-studio daemon RPC（与 cron/CLI 同路），无自有业务逻辑。端口 11431（port-registry: fusion-operation）。
+
+```bash
+python web_api.py               # 默认 127.0.0.1:11431，FUSION_OPERATION_API_PORT 可覆盖
+```
+
+| Method | Path | 说明 |
+|---|---|---|
+| GET | `/api/health` | mlx 健康 + daemon RPC 可达性 + 队列计数 |
+| GET | `/api/queue` | 队列计数 + pending/inflight 明细 |
+| GET | `/api/scheduler` | daemon cron job 列表（注入 `_auth` JWT） |
+| GET | `/api/graphs` | 本地 graph 模板清单 |
+| POST | `/api/run` | `{graph, approve, vars}` 异步执行，返回 run_id |
+| GET | `/api/runs` / `/api/runs/{id}` | 运行注册表 / 单次状态与结果 |
+
+- **鉴权**：写端点（POST /api/run）要求 Bearer = 配置的 client key（issue #22 链）；无 key（匿名 dev）时放行但告警，仅 127.0.0.1 绑定。
+- **daemon RPC auth**：daemon #326 起 UDS 强制 `_auth` JWT；`douyin_tools/rpc_auth.py` 用静态 module key（env `FUSION_AGENT_STUDIO_API_KEY` > `~/.fusion-agent-studio/web_module_key`）经 `auth.login` 换 JWT 并缓存。注意 `~/.fusion-agent-studio/env.local` 的同名变量会覆盖 start.sh 的 export——两处不一致会 `invalid apikey: key_not_found`。
+- **UI**：控制面板页留给 fusion-web-shell 模块化阶段（本 issue 范围为 REST surface）。
 
 ## 运行 DAG
 

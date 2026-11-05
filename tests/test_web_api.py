@@ -23,6 +23,12 @@ def _fake_agent_client(monkeypatch):
     import agent_runtime.sdk.client as sdk
 
     monkeypatch.setattr(sdk, "AgentClient", FakeAgentClient)
+    # CI runners have no module key (env/file absent) — stub it so authed_call
+    # does not raise before reaching the fake client.
+    import douyin_tools.rpc_auth as rpc_auth
+
+    monkeypatch.setattr(rpc_auth, "_module_key", lambda: "ci-test-key")
+    rpc_auth.reset_token_cache()
 
 
 def test_health_ok(client, monkeypatch):

@@ -1,3 +1,19 @@
+---
+doc_id: fusion-operation/readme
+product: fusion-operation
+class: app
+entry: service
+doc_type: readme
+title: { zh: "fusion-operation 说明", en: "fusion-operation readme" }
+audience: engineer
+status: draft
+version: 0.1.3
+updated: 2026-11-07
+owner: @dahai
+source_of_truth:
+  - README.md
+---
+
 # fusion-operation
 
 基于 Fusion 生态（fusion-mlx 推理引擎 + fusion-agent-studio DAG 运行时）的抖音吸粉自动化编排落地实现。研读 `~/video` 抖音吸粉逻辑，做成可编排、可生产、可商业发布的 DAG 工作流。
@@ -163,7 +179,7 @@ python -c "import asyncio,json;from douyin_tools.queue_ops import QueueOpsTool;p
 | douyin_stats 真实抓取（已登录会话） | ✅ 登录态有效，92 作品+账号粉丝37/获赞324；play/like/share 已补齐（item/list API 取 vid/title/comment_count + 页面正文滚动解析 播放/点赞/分享，52/92 带真实播放量） |
 | 真实发布（dry_run=false） | ✅ 3 bug 修复并端到端验证：精确点击底部"发布"主按钮（避开"高清发布"误匹配触发离开弹窗）+ `_parse_bool` 解析字符串 dry_run + `_dequeue` 扁平 desc_text 纯描述（旧 `{{script_json}}` 把 dict repr 塞进描述框）。Graph D `gate_ok`：publish_ok 才归档 published，失败留 pending。作品数 92→95 实发 3 条，stats 二次验证描述纯文本 |
 | **Phase 1 数据闭环（进化机制）** | ✅ `perf_track` 工具（snapshot+rank）：95 条全量落盘 stats_history.jsonl（按 vid 累积多时间点快照+生命周期 stage+interaction_rate）；rank 分类 hot/mid/cold（19/35/41）；Graph E `douyin_evolve` 端到端跑通；发现首条破千视频（1329 播放，结尾选择题钩子互动率最高）。详见 `~/video/video-enhance.md` |
-| **Phase 2 归因回灌** | ✅ `perf_analyze` 真实模型归因：读取 stats_history（ranked）+ published script_json，模型抽取 winning_patterns（winning_topics/winning_hooks/losing_patterns/title_formula/topic_gen_hint）落盘 `out/ops/winning_patterns.json`。真实数据归因结果与人工观察吻合（极端数字+反常识、第二人称代入、颠覆常识否定句）。回灌闭环：`topic_gen` 读 patterns+blacklist+published 排重注入 hint；`mlx_script` 注入 winning_hooks 约束脚本生成 |
+| **Phase 2 归因回灌** | ✅ `perf_analyze` 真实模型归因：读取 stats_history（ranked）+ published script_json，模型抽取 winning_patterns（winning_topics/winning_hooks/losing_patterns/title_formula/topic_gen_hint）落盘 `out/ops/winning_patterns.json`。真实数据归因结果与人工观察吻合（极端数字+反常识、第二人称代入、反常识否定句）。回灌闭环：`topic_gen` 读 patterns+blacklist+published 排重注入 hint；`mlx_script` 注入 winning_hooks 约束脚本生成 |
 | **Phase 3 A/B 变体** | ✅ `mlx_script` 增 `hook_variant` 参数（A=数字+反常 / B=提问+代入 / C=悬念+冲突），变体标记写入 script_json→published；`perf_track` rank 增 `by_variant` 聚合（count/plays_avg/plays_max）+ vid 反查回填（按标题模糊匹配 stats vid→published）。可量化 A/B/C 钩子效果 |
 | **Phase 4 自修复** | ✅ `self_repair` 工具（action=scan/retitle/reclip/blacklist）：scan 扫 stats_history 找 age≥72h & plays<100 & interaction_rate<0.01 的差片（且 vid 在 published 存在，避免视频文件已删）；retitle 真实模型换标题重入 pending（复用原视频文件，不重渲染）；reclip 按用户决策标记 skip（仅换标题重发）；blacklist 写 topic_blacklist.json。Graph F `douyin_repair_publish`：scan→gate_candidate→retitle 条件路由。真实模型 retitle 验证：「夸克汤是什么」→「100 万人只喝 1 滴！夸克汤竟能吸走所有病毒？」（套用 title_formula） |
 | **Phase 5 高峰调度** | ✅ `publish_scheduler` 工具：高峰窗口 9-10/11-12/14-15/18-19（4 发布窗口，对齐 cron 节奏），输出 in_peak/should_wait/next_window。Graph D v2 增 scheduler 节点 + gate_peak（in_peak==true 才 dequeue 发布，false 结束）。`run_graph.py` off-peak 自动 break。真实路由验证：非高峰→stop，next_window 指向下一窗口 |

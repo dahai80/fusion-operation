@@ -1,3 +1,19 @@
+---
+doc_id: fusion-operation/weekly-improvement-2026-09-07
+product: fusion-operation
+class: app
+entry: service
+doc_type: guide
+title: { zh: "fusion-operation 周改进 2026-09-07", en: "fusion-operation weekly improvement 2026-09-07" }
+audience: engineer
+status: draft
+version: 0.1.3
+updated: 2026-11-07
+owner: @dahai
+source_of_truth:
+  - docs/weekly-improvement-2026-09-07.md
+---
+
 # 周运营分析与改进 — 2026-09-07
 
 > 数据范围：2026-08-22 ~ 2026-09-07（过去两周）。数据源：`out/ops/stats_history.jsonl`（168 unique vid，最新快照 09-06 23:15）、`out/queue/published/`（49 published）、cron.db（62 executions）、self_commented.json。

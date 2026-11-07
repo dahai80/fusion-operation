@@ -9,7 +9,7 @@ audience: engineer
 status: draft
 version: 0.1.3
 updated: 2026-11-07
-owner: @dahai
+owner: "@dahai"
 source_of_truth:
   - docs/weekly-improvement-2026-08-25.md
 ---

@@ -9,7 +9,7 @@ audience: engineer
 status: draft
 version: 0.1.3
 updated: 2026-11-07
-owner: @dahai
+owner: "@dahai"
 source_of_truth:
   - douyin_tools/config.py
   - douyin_config.json

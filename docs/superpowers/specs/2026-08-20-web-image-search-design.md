@@ -1,3 +1,19 @@
+---
+doc_id: fusion-operation/web-image-search-design
+product: fusion-operation
+class: app
+entry: service
+doc_type: guide
+title: { zh: "fusion-operation 网图搜索设计", en: "fusion-operation web image search design" }
+audience: engineer
+status: draft
+version: 0.1.3
+updated: 2026-11-07
+owner: @dahai
+source_of_truth:
+  - docs/superpowers/specs/2026-08-20-web-image-search-design.md
+---
+
 # web_image_search 工具设计 — NASA 真实天体图优先
 
 ## 背景与目标

@@ -1,3 +1,19 @@
+---
+doc_id: fusion-operation/weekly-improvement-2026-08-25
+product: fusion-operation
+class: app
+entry: service
+doc_type: guide
+title: { zh: "fusion-operation 周改进 2026-08-25", en: "fusion-operation weekly improvement 2026-08-25" }
+audience: engineer
+status: draft
+version: 0.1.3
+updated: 2026-11-07
+owner: @dahai
+source_of_truth:
+  - docs/weekly-improvement-2026-08-25.md
+---
+
 # 抖音运营改进分析报告（2026-08-25）
 
 ## 一、基线数据（真实 stats_history）
@@ -59,7 +75,7 @@
 | # | 问题 | 证据 | 根因 | 落地修复 | 文件 | 状态 |
 |---|------|------|------|---------|------|------|
 | 1 | 14/26 周片 0 播放 | 撞车主题×15，真发成功仍 0 | 标题级去重被换标题绕过 | **主题实体级硬去重**：抽取选题核心实体（太阳/黑洞/时间/磁场），同一实体近 N 选题最多 2 次，超限硬剔除重抽 | topic_gen.py | 落地中 |
-| 2 | max 503 未破千 | 极端数字公式有效但未爆 | 钩子无强度标准、无完播/分享驱动 | **钩子强化**：首句必含具体数字+反常识后果；ending_hook 加完播钩（「最后 3 秒颠覆认知」）+分享钩（「转发给好奇的朋友」） | mlx_script.py | 落地中 |
+| 2 | max 503 未破千 | 极端数字公式有效但未爆 | 钩子无强度标准、无完播/分享驱动 | **钩子强化**：首句必含具体数字+反常识后果；ending_hook 加完播钩（「最后 3 秒刷新认知」）+分享钩（「转发给好奇的朋友」） | mlx_script.py | 落地中 |
 | 3 | 模板词污染 | losing_patterns 列词但 0 播放片仍带 | 软提示失效，无硬禁词 | **硬禁词**：SYSTEM_PROMPT 列禁用模板词，代码层对输出选题做禁词扫描，命中则剔除重抽 | topic_gen.py + mlx_script.py | 落地中 |
 | 4 | 选题自残 | 太阳压缩×6 | 同实体无频次上限 | 同 #1 实体级去重 + 单实体上限 2 | topic_gen.py | 同 #1 |
 

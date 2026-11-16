@@ -1,10 +1,23 @@
 name: CI
 
+# Issue #26 (fusion#2 CI retrofit): superseded runs on the same branch are
+# cancelled so pushes during review do not queue redundant macos minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [master]
+    # Docs-only changes never affect tests or deploy_check.
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
   pull_request:
     branches: [master]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
 
 jobs:
   test:
@@ -25,6 +38,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          # Issue #26: wheel cache keyed on the manifest; saves the numpy/Pillow/
+          # opencv download+build share of each run.
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
         run: |

@@ -51,6 +51,11 @@ jobs:
           pip install -e /tmp/fusion-harness --no-deps
           pip install -e /tmp/fusion-agent-studio
 
+      - name: Lint gate (ruff, issue #29)
+        run: |
+          pip install ruff
+          python -m ruff check .
+
       - name: Run tests
         run: |
           python -m pytest tests/ -v

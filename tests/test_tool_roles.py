@@ -1,11 +1,10 @@
 import inspect
 import pkgutil
 
-import pytest
+from tools.base import BaseTool
 
 import douyin_tools
-from tools.base import BaseTool
-from douyin_tools.roles import ALL_ROLES, ROLE_TOOLS, LEAD, RESEARCHER, WRITER, IMAGER, VOICER, PUBLISHER, ANALYST
+from douyin_tools.roles import ALL_ROLES, ANALYST, IMAGER, LEAD, PUBLISHER, RESEARCHER, ROLE_TOOLS, VOICER, WRITER
 
 
 def _discover_tool_classes():

@@ -6,8 +6,8 @@ import re
 
 from tools.base import BaseTool
 
-from .config import DOUYIN_UPLOAD_URL, DOUYIN_MANAGE_URL
-from .playwright_profile import profile_lock, launch_with_retry, parse_bool
+from .config import DOUYIN_MANAGE_URL, DOUYIN_UPLOAD_URL
+from .playwright_profile import launch_with_retry, parse_bool, profile_lock
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class DouyinPublishTool(BaseTool):
         if not os.path.exists(video_path):
             logger.error("video not exist %s", video_path)
             return json.dumps({"error": "video not exist"})
-        from .script_helpers import parse_script, extract_description, extract_title
+        from .script_helpers import extract_description, extract_title, parse_script
         desc_script = parse_script(description)
         if desc_script:
             description = extract_description(desc_script) or description
@@ -147,7 +147,7 @@ class DouyinPublishTool(BaseTool):
             return {"ok": True, "vid": ""}
 
         logger.info("[8/10] click publish")
-        click_res = await self._click_publish(page)
+        await self._click_publish(page)
         await asyncio.sleep(3)
 
         logger.info("[9/10] handle confirm dialog")

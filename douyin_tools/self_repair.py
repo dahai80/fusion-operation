@@ -6,7 +6,7 @@ import time
 from tools.base import BaseTool
 
 from . import config
-from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config, mlx_headers
+from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config
 from .history_store import load_history
 from .resilient_http import post_json
 

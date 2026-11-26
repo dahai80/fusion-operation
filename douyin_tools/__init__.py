@@ -3,8 +3,8 @@ import inspect
 import logging
 import pkgutil
 
-from tools.registry import ToolRegistry
 from tools.base import BaseTool
+from tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ for _mod_short, _cls in _DISCOVERED:
 def create_douyin_registry() -> ToolRegistry:
     registry = ToolRegistry()
     failed = []
-    for mod_short, cls in _DISCOVERED:
+    for _mod_short, cls in _DISCOVERED:
         try:
             registry.register(cls())
         except Exception as e:

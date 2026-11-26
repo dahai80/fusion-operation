@@ -3,16 +3,16 @@ import json
 import logging
 import os
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s INFO %(message)s", datefmt="%H:%M:%S")
-logger = logging.getLogger("compare")
-
-from douyin_tools.mlx_script import MlxScriptTool
-from douyin_tools.mlx_image import MlxImageTool
-from douyin_tools.mlx_tts import MlxTtsTool
 from douyin_tools.comfyui_produce import ComfyUIImageTool
 from douyin_tools.comfyui_tts import ComfyUITtsTool
-from douyin_tools.ffmpeg_compose import FfmpegComposeTool
 from douyin_tools.config import ensure_dirs
+from douyin_tools.ffmpeg_compose import FfmpegComposeTool
+from douyin_tools.mlx_image import MlxImageTool
+from douyin_tools.mlx_script import MlxScriptTool
+from douyin_tools.mlx_tts import MlxTtsTool
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s INFO %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("compare")
 
 OUT = os.path.join(os.path.dirname(__file__), "out", "compare")
 os.makedirs(OUT, exist_ok=True)

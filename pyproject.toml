@@ -33,3 +33,10 @@ include = ["douyin_tools*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]

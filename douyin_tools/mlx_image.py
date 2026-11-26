@@ -4,15 +4,15 @@ import os
 import time
 import uuid
 
+from tools.base import BaseTool
+
 from . import config
 from .config import (
     FALLBACK_IMAGE_DIR,
     IMAGE_DIR,
     ensure_dirs,
-    mlx_headers,
 )
 from .resilient_http import post_json
-from tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class MlxImageTool(BaseTool):
         # Graph 传入的整个 script_json (dict repr), _parse_list 先跑会把 dict 按逗号
         # 分段产垃圾图. 先 parse_script 提 scenes[].img_prompt, 提不到再 _parse_list
         # 兼容旧 prompts 数组/逗号串输入.
-        from .script_helpers import parse_script, extract_prompts
+        from .script_helpers import extract_prompts, parse_script
         script = parse_script(prompts)
         if script is not None:
             plist = extract_prompts(script)

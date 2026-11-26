@@ -31,7 +31,6 @@ from douyin_tools.{mod} import {cls} as _Tool
 
 {cls} = _Tool
 logger.info("douyin plugin shim loaded: {name} -> %s", _Tool.__name__)'''
-'''
 
 
 def _discover_tools():
@@ -42,8 +41,9 @@ def _discover_tools():
     import inspect
     import pkgutil
 
-    import douyin_tools
     from tools.base import BaseTool
+
+    import douyin_tools
 
     non_tool = {"config", "script_helpers", "comfyui_client"}
     tools = []

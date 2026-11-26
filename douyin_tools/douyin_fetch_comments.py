@@ -6,7 +6,7 @@ import re
 from tools.base import BaseTool
 
 from .config import DOUYIN_COMMENT_URL
-from .playwright_profile import profile_lock, launch_with_retry
+from .playwright_profile import launch_with_retry, profile_lock
 
 logger = logging.getLogger(__name__)
 

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import time as _time
 
 from agent_runtime.sdk.client import AgentClient
 
@@ -16,7 +17,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_graph")
 
-import time as _time
 
 _graph_id_cache = {}
 # graph_id 缓存 TTL (审计 P1-4): 永久缓存 + sync_graphs 重建/daemon 重启改 id -> stale ->
@@ -106,9 +106,10 @@ async def _rpc_run_once(graph_path, approve, extra_vars):
 
 
 async def _local_run_once(graph_path, approve=True, extra_vars=None):
+    from agent_runtime.context import AgentEventType
     from agent_runtime.graph import AgentGraph
     from agent_runtime.runtime import AgentRuntime
-    from agent_runtime.context import AgentEventType
+
     from douyin_tools import create_douyin_registry
 
     with open(graph_path, encoding="utf-8") as f:

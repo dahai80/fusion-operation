@@ -132,7 +132,7 @@ for v in window_vids:
         continue
     rows.append((int(s.get("plays", 0) or 0), s.get("title", "")[:40], vid_variant.get(v, "?"), v))
 rows.sort(reverse=True)
-for p, t, var, v in rows[:10]:
+for p, t, var, _v in rows[:10]:
     print(f"  plays={p:<6} variant={var:<3} {t}")
 
 # variant aggregate in window

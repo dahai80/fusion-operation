@@ -34,7 +34,7 @@ class ComfyUITtsTool(BaseTool):
     }
 
     async def execute(self, text, voice="", speed=1.0, out_name="", **_):
-        from .script_helpers import parse_script, extract_narration
+        from .script_helpers import extract_narration, parse_script
         script = parse_script(text)
         if script:
             text = extract_narration(script) or ""

@@ -91,10 +91,10 @@ async def scheduler():
 
     try:
         res = await asyncio.wait_for(authed_call("cron.list", {}, AGENT_STUDIO_SOCKET), timeout=15)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=503, detail="daemon cron.list timed out >15s")
+    except TimeoutError:
+        raise HTTPException(status_code=503, detail="daemon cron.list timed out >15s") from None
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"daemon unreachable: {e}")
+        raise HTTPException(status_code=503, detail=f"daemon unreachable: {e}") from e
     if res.get("error"):
         raise HTTPException(status_code=502, detail=f"cron.list failed: {res['error']}")
     return {"jobs": res.get("jobs", [])}

@@ -111,7 +111,7 @@ class ComfyUIClient:
         if not res:
             return {"prompt_id": pid, "status": "timeout", "paths": []}
         all_paths = []
-        for nid, entry in res["outputs"].items():
+        for _nid, entry in res["outputs"].items():
             all_paths.extend(self.resolve_output(entry))
         return {"prompt_id": pid, "status": res["status"], "paths": all_paths}
 

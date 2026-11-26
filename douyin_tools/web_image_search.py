@@ -6,6 +6,7 @@ import time
 import uuid
 
 import httpx
+from tools.base import BaseTool
 
 from . import config
 from .config import (
@@ -14,7 +15,6 @@ from .config import (
     ensure_dirs,
 )
 from .script_helpers import extract_prompts, parse_script
-from tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class WebImageSearchTool(BaseTool):
             return json.dumps({"image_paths": [], "enough": False}, ensure_ascii=False)
         pq = max(int(per_query or config.WEB_PER_QUERY), 1)
         image_paths = []
-        for qi, query in enumerate(qlist):
+        for query in qlist:
             for ni in range(pq):
                 dst = os.path.join(IMAGE_DIR, f"{out_prefix}_{int(time.time())}_{uuid.uuid4().hex[:6]}_{len(image_paths):03d}.png")
                 real = await self._fetch_one(query, ni, dst)

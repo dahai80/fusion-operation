@@ -4,9 +4,9 @@ import logging
 import os
 import sys
 
+from agent_runtime.context import AgentEventType
 from agent_runtime.graph import AgentGraph
 from agent_runtime.runtime import AgentRuntime
-from agent_runtime.context import AgentEventType
 
 from douyin_tools import create_douyin_registry
 

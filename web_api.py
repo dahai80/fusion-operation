@@ -29,7 +29,7 @@ from douyin_tools.config import _mlx_api_key, mlx_health
 
 logger = logging.getLogger("web_api")
 
-app = FastAPI(title="fusion-operation", version="0.1.3")
+app = FastAPI(title="fusion-operation", version="0.1.6")
 
 # In-memory run registry (single-process service; daemon holds durable state).
 _runs = {}

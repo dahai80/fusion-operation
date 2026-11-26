@@ -86,7 +86,25 @@ fusion-mlx 启用 api_key 鉴权时，工具通过 `config.mlx_headers()` 取 ke
 ```bash
 pytest tests/ -q                # 263 个用例全绿
 pytest tests/test_douyin_tools.py::test_publish_dry_run_flow -v
-ruff check .                    # 如配置
+ruff check .                    # CI 门禁（issue #29）
+```
+
+## CLI 入口（issue #28）
+
+`pip install -e .` 后注册两个命令：
+
+```bash
+douyin-ops graphs/douyin_auto_publish.json true   # 等价 python run_graph.py
+douyin-ops-api                                    # 等价 python web_api.py
+```
+
+## 运维：out/ 工件清理（issue #28）
+
+`out/videos` / `out/audio` / `out/images` / `out/compare` 为可再生过程工件，会无限增长（审计时 1.0G）。清理脚本只删媒体文件，**永不触碰** `out/ops`（运营证据）、`out/queue`（队列权威）、`out/fallback_images`（发布兜底图）：
+
+```bash
+python scripts/clean_artifacts.py --days 14 --dry-run   # 预览
+python scripts/clean_artifacts.py --days 14             # 执行
 ```
 
 ## REST API（issue #24）

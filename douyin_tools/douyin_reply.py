@@ -6,7 +6,7 @@ import os
 from tools.base import BaseTool
 
 from .config import DOUYIN_COMMENT_URL, OPS_DATA_DIR
-from .playwright_profile import profile_lock, launch_with_retry
+from .playwright_profile import launch_with_retry, profile_lock
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ class DouyinReplyTool(BaseTool):
                     if aweme_title:
                         await self._click_work(page, aweme_title)
                         await asyncio.sleep(8)
-                    for i, d in enumerate(todo):
+                    for d in todo:
                         key = d.get("comment_text", "") or d.get("text", "")
                         cid = d.get("id", "")
                         # 审计 P2-16: 旧单条评论 raise 中断整批, 已 claim 的 cid 永不重试.
@@ -272,7 +272,7 @@ class DouyinReplyTool(BaseTool):
             fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
             try:
                 try:
-                    with open(REPLIED_FILE, "r", encoding="utf-8") as f:
+                    with open(REPLIED_FILE, encoding="utf-8") as f:
                         data = json.load(f)
                     replied_set = set(data.get("replied_ids", []))
                 except (FileNotFoundError, ValueError, TypeError):
@@ -302,7 +302,7 @@ class DouyinReplyTool(BaseTool):
         import fcntl
         os.makedirs(OPS_DATA_DIR, exist_ok=True)
         try:
-            with open(REPLIED_FILE, "r", encoding="utf-8") as f:
+            with open(REPLIED_FILE, encoding="utf-8") as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH)
                 try:
                     data = json.load(f)

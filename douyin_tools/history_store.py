@@ -99,7 +99,7 @@ def prune_history(max_per_vid=_MAX_HISTORY_PER_VID_DEFAULT, prune_threshold=None
             continue
         by_vid.setdefault(vid, []).append(r)
     kept = []
-    for vid, lst in by_vid.items():
+    for lst in by_vid.values():
         kept.extend(lst[-cap:])
     tmp_path = p + ".pruned"
     with open(tmp_path, "w", encoding="utf-8") as f:

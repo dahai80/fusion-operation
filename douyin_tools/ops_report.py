@@ -6,7 +6,6 @@ import os
 from tools.base import BaseTool
 
 from .config import OPS_DATA_DIR, QUEUE_DIR
-from . import history_store
 from .history_store import append_history, latest_per_vid, load_history
 
 logger = logging.getLogger(__name__)

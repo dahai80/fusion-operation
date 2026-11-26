@@ -3,13 +3,12 @@ import logging
 import os
 
 import httpx
-
 from tools.base import BaseTool
 
 from . import config
-from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, mlx_headers, get_json_config
+from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config
 from .history_store import latest_per_vid, load_history
-from .resilient_http import post_json, CircuitOpenError
+from .resilient_http import CircuitOpenError, post_json
 
 logger = logging.getLogger(__name__)
 
@@ -144,13 +143,13 @@ class PerfAnalyzeTool(BaseTool):
             resp = await post_json(f"{config.MLX_BASE}/v1/chat/completions", payload, service="mlx")
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             logger.error("perf_analyze mlx unavailable: %s: %s", type(e).__name__, str(e)[:200])
-            raise RuntimeError(f"perf_analyze mlx unavailable: {type(e).__name__}")
+            raise RuntimeError(f"perf_analyze mlx unavailable: {type(e).__name__}") from e
         except CircuitOpenError as e:
             logger.error("perf_analyze circuit open: %s", e)
-            raise RuntimeError(f"perf_analyze mlx circuit open")
+            raise RuntimeError("perf_analyze mlx circuit open") from e
         except Exception:
             logger.exception("perf_analyze model call infra failed")
-            raise RuntimeError("perf_analyze model call infra failed")
+            raise RuntimeError("perf_analyze model call infra failed") from None
         if resp.status_code != 200:
             logger.error("perf_analyze http %s: %s", resp.status_code, resp.text[:200])
             raise RuntimeError(f"perf_analyze mlx http {resp.status_code}")

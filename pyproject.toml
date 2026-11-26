@@ -26,6 +26,13 @@ test = [
     "pytest-mock",
 ]
 
+[project.scripts]
+douyin-ops = "run_graph:main"
+douyin-ops-api = "web_api:main"
+
+[tool.setuptools]
+py-modules = ["run_graph", "web_api"]
+
 [tool.setuptools.packages.find]
 include = ["douyin_tools*"]
 
@@ -33,3 +40,10 @@ include = ["douyin_tools*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]

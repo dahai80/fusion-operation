@@ -5,8 +5,8 @@ import os
 import pytest
 
 from douyin_tools.douyin_publish import DouyinPublishTool
-from douyin_tools.queue_ops import QueueOpsTool
 from douyin_tools.publish_scheduler import PublishSchedulerTool
+from douyin_tools.queue_ops import QueueOpsTool
 from douyin_tools.self_repair import SelfRepairTool
 
 GRAPHS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "graphs")

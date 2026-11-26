@@ -8,8 +8,8 @@ from playwright.async_api import async_playwright
 
 from douyin_tools.config import DOUYIN_COMMENT_URL, DOUYIN_PROFILE
 from douyin_tools.douyin_fetch_comments import DouyinFetchCommentsTool
-from douyin_tools.mlx_reply_draft import MlxReplyDraftTool
 from douyin_tools.douyin_reply import DouyinReplyTool
+from douyin_tools.mlx_reply_draft import MlxReplyDraftTool
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("verify_graph_b_real")

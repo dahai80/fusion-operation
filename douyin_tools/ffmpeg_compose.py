@@ -11,10 +11,9 @@ import time
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-
 from tools.base import BaseTool
 
-from .config import FPS, H, W, FONT_PATH, IMAGE_DIR, VIDEO_DIR, ensure_dirs
+from .config import FONT_PATH, FPS, IMAGE_DIR, VIDEO_DIR, H, W, ensure_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,10 @@ class FfmpegComposeTool(BaseTool):
             logger.error("compose invalid imgs=%s audio=%s", bool(imgs), audio_path)
             return json.dumps({"error": "invalid inputs"})
         from .script_helpers import (
-            parse_script, extract_scenes, extract_title, extract_narration_segments,
+            extract_narration_segments,
+            extract_scenes,
+            extract_title,
+            parse_script,
         )
         script = parse_script(scenes)
         scenes_list = extract_scenes(script) if script else []

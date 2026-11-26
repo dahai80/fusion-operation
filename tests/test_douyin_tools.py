@@ -4,22 +4,21 @@ import time
 
 import pytest
 
-from douyin_tools import create_douyin_registry
-from douyin_tools import history_store
-from douyin_tools.config import ensure_dirs, IMAGE_DIR, AUDIO_DIR, VIDEO_DIR, OPS_DATA_DIR
-from douyin_tools.ffmpeg_compose import FfmpegComposeTool
-from douyin_tools.mlx_image import MlxImageTool
-from douyin_tools.mlx_script import MlxScriptTool
-from douyin_tools.mlx_tts import MlxTtsTool
-from douyin_tools.douyin_publish import DouyinPublishTool
+from douyin_tools import create_douyin_registry, history_store
+from douyin_tools.comfyui_produce import ComfyUIImageTool
+from douyin_tools.config import AUDIO_DIR, IMAGE_DIR, VIDEO_DIR, ensure_dirs
 from douyin_tools.douyin_fetch_comments import DouyinFetchCommentsTool
+from douyin_tools.douyin_publish import DouyinPublishTool
 from douyin_tools.douyin_reply import DouyinReplyTool
 from douyin_tools.douyin_stats import DouyinStatsTool
+from douyin_tools.ffmpeg_compose import FfmpegComposeTool
+from douyin_tools.mlx_image import MlxImageTool
 from douyin_tools.mlx_reply_draft import MlxReplyDraftTool
+from douyin_tools.mlx_script import MlxScriptTool
+from douyin_tools.mlx_tts import MlxTtsTool
 from douyin_tools.ops_report import OpsReportTool
 from douyin_tools.queue_ops import QueueOpsTool
 from douyin_tools.topic_gen import TopicGenTool
-from douyin_tools.comfyui_produce import ComfyUIImageTool
 from douyin_tools.web_image_search import WebImageSearchTool
 
 
@@ -386,22 +385,22 @@ def test_stats_parse_page_body():
     import re as _re
     cur = None
     status_words = {"已发布", "未发布", "审核中", "已删除", "私密", "公开", "可见"}
-    for l in body.split("\n"):
-        if l in labels:
-            cur = labels[l]
+    for ln in body.split("\n"):
+        if ln in labels:
+            cur = labels[ln]
             if cur == "plays":
                 blocks.append({"title": "", "plays": 0, "likes": 0, "comments": 0, "shares": 0})
             continue
-        if cur and t._is_num(l):
+        if cur and t._is_num(ln):
             if blocks:
-                blocks[-1][cur] = t._to_num(l)
+                blocks[-1][cur] = t._to_num(ln)
             cur = None
             continue
         cur = None
-        if l in status_words or _re.match(r"^\d+:\d{2}$", l):
+        if ln in status_words or _re.match(r"^\d+:\d{2}$", ln):
             continue
-        if len(l) > 15 and blocks and not blocks[-1].get("title"):
-            blocks[-1]["title"] = l[:60]
+        if len(ln) > 15 and blocks and not blocks[-1].get("title"):
+            blocks[-1]["title"] = ln[:60]
     assert blocks[0]["title"].startswith("如果宇宙停止膨胀")
     assert blocks[0]["plays"] == 124
     assert blocks[0]["likes"] == 4
@@ -772,6 +771,7 @@ def test_queue_store_enqueue_dequeue_archive(tmp_path, monkeypatch):
 
 def test_queue_store_dequeue_atomic_no_dup(tmp_path, monkeypatch):
     import threading
+
     from douyin_tools import queue_store
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     store = queue_store.QueueStore(os.path.join(qdir, "queue.db"))
@@ -784,7 +784,10 @@ def test_queue_store_dequeue_atomic_no_dup(tmp_path, monkeypatch):
             results.append(r["id"])
     t1 = threading.Thread(target=grab)
     t2 = threading.Thread(target=grab)
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     assert len(results) == 2
     assert set(results) == {"s0", "s1"}
     store.close()
@@ -837,7 +840,8 @@ def test_queue_store_archive_lease_guard(tmp_path, monkeypatch):
 async def test_project_to_files_writes_projection(tmp_path, monkeypatch):
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     t = QueueOpsTool()
-    video = tmp_path / "v.mp4"; video.write_bytes(b"x")
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
     script = json.dumps({"title": "proj", "narration": "n", "scenes": []})
     r = json.loads(await t.execute(action="enqueue", video_path=str(video), script_json=script, topic="proj"))
     item_id = r["item_id"]
@@ -852,7 +856,6 @@ async def test_project_to_files_writes_projection(tmp_path, monkeypatch):
 
 def test_reconcile_drift_repairs_files(tmp_path, monkeypatch):
     from douyin_tools import queue_store
-    from douyin_tools import queue_ops as qmod
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     store = qmod._get_store()
     store.enqueue({"id": "rec1", "video_path": "/v", "title": "t", "created_at": int(time.time())})
@@ -873,7 +876,6 @@ def test_reconcile_drift_repairs_files(tmp_path, monkeypatch):
 def test_reconcile_alerts_on_drift(tmp_path, monkeypatch):
     # ops_health._queue_db_health: drift → 修文件 + append_alert (reconcile 修复后文件回正).
     from douyin_tools import history_store
-    from douyin_tools import queue_ops as qmod
     from douyin_tools.ops_health import OpsHealthTool
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     monkeypatch.setattr(history_store, "ALERTS_FILE", str(tmp_path / "alerts.jsonl"))
@@ -889,8 +891,6 @@ def test_reconcile_alerts_on_drift(tmp_path, monkeypatch):
 
 
 def test_prune_older_than_90_days(tmp_path, monkeypatch):
-    from douyin_tools import queue_store
-    from douyin_tools import queue_ops as qmod
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     store = qmod._get_store()
     now = int(time.time())
@@ -908,8 +908,6 @@ def test_prune_older_than_90_days(tmp_path, monkeypatch):
 
 
 def test_migrate_files_to_db_on_first_init(tmp_path, monkeypatch):
-    from douyin_tools import queue_store
-    from douyin_tools import queue_ops as qmod
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     # 预置 pending + published 文件
     os.makedirs(os.path.join(qdir, "pending"), exist_ok=True)
@@ -931,7 +929,8 @@ async def test_consumers_read_projection_unchanged(tmp_path, monkeypatch):
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     monkeypatch.setattr("douyin_tools.topic_gen.PUBLISHED_DIR", os.path.join(qdir, "published"))
     t = QueueOpsTool()
-    video = tmp_path / "v.mp4"; video.write_bytes(b"x")
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
     script = json.dumps({"title": "cons", "narration": "n", "scenes": []})
     r = json.loads(await t.execute(action="enqueue", video_path=str(video), script_json=script, topic="cons"))
     await t.execute(action="dequeue")
@@ -943,7 +942,6 @@ async def test_consumers_read_projection_unchanged(tmp_path, monkeypatch):
 
 async def test_ops_health_queue_db_health(tmp_path, monkeypatch):
     from douyin_tools.ops_health import OpsHealthTool
-    from douyin_tools import queue_ops as qmod
     qmod, qdir = _setup_queue(tmp_path, monkeypatch)
     # DB 无内容 → drift 0, prune 0
     t = OpsHealthTool()
@@ -1003,8 +1001,9 @@ async def test_perf_track_snapshot_and_rank(tmp_path, monkeypatch):
 
 
 def test_perf_track_parse_create_time():
-    from douyin_tools.perf_track import PerfTrackTool
     import datetime
+
+    from douyin_tools.perf_track import PerfTrackTool
     d1 = PerfTrackTool._parse_create_time("发布于2026年08月10日 10:19")
     assert d1 == datetime.datetime(2026, 8, 10, 10, 19)
     d2 = PerfTrackTool._parse_create_time(1786000000)
@@ -1034,7 +1033,7 @@ def test_perf_track_prune_history_caps_per_vid(tmp_path, monkeypatch):
     lines = hist.read_text().strip().split("\n")
     assert len(lines) == 3, "must cap to max_history_per_vid"
     assert dropped == 7
-    kept = [json.loads(l) for l in lines]
+    kept = [json.loads(ln) for ln in lines]
     # 保留尾部最新 3 条 (plays 7,8,9).
     assert [k["plays"] for k in kept] == [7, 8, 9]
 
@@ -1346,8 +1345,9 @@ def test_perf_track_backfill_published_vid(tmp_path, monkeypatch):
 
 
 def test_perf_track_backfill_by_description_prefix(tmp_path, monkeypatch):
-    import douyin_tools.perf_track as pmod
     import json as _j
+
+    import douyin_tools.perf_track as pmod
     pub = tmp_path / "published"
     pub.mkdir()
     item = {
@@ -1368,7 +1368,6 @@ def test_perf_track_backfill_by_description_prefix(tmp_path, monkeypatch):
 
 
 def test_comfyui_tts_build_graph_http_backend(monkeypatch):
-    import douyin_tools.comfyui_tts as tmod
     from douyin_tools import config
     from douyin_tools.comfyui_tts import ComfyUITtsTool
 
@@ -1386,7 +1385,6 @@ def test_comfyui_tts_build_graph_http_backend(monkeypatch):
 
 
 def test_comfyui_tts_build_graph_local_backend(monkeypatch):
-    import douyin_tools.comfyui_tts as tmod
     from douyin_tools import config
     from douyin_tools.comfyui_tts import ComfyUITtsTool
 
@@ -1425,7 +1423,7 @@ def test_comfyui_tts_default_voice_per_backend(monkeypatch):
     import asyncio
 
     tool = ComfyUITtsTool()
-    out = asyncio.run(tool.execute("测试中文", out_name="z"))
+    asyncio.run(tool.execute("测试中文", out_name="z"))
     # 默认 voice 应被替换成 Cherry (http backend)
     assert captured["synth"]["voice"] == "Cherry"
     assert captured["synth"]["backend"] == "http"
@@ -1442,6 +1440,7 @@ def test_declarative_config_override(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("DOUYIN_CONFIG_FILE", str(cfg_path))
     import importlib
+
     import douyin_tools.config as cfg
     importlib.reload(cfg)
     import douyin_tools.mlx_script as ms
@@ -1468,8 +1467,8 @@ def test_declarative_config_override(tmp_path, monkeypatch):
 def test_config_dynamic_constant_reflects_json_edit(tmp_path, monkeypatch):
     # 审计 H5 契约: 动态常量 (config.X 属性访问) 改 JSON 立即生效, 不 re-import.
     # 旧实现模块级常量 import 时绑定一次, daemon launchd 长进程改配置永不生效 -> 本测覆盖.
-    import json
     import importlib
+    import json
     cfg_path = tmp_path / "douyin_config.json"
     cfg_path.write_text(json.dumps({
         "models": {"chat": "MODEL-V1"},
@@ -1557,8 +1556,9 @@ def test_sync_agent_config_definition_compatible(tmp_path, monkeypatch):
     # 生成的 definition.json 必须能被 daemon 的 AgentDefinition.from_dict 解析,
     # 且 tool config 参数名必须匹配 tool openai_schema (runtime 注入陷阱:
     # validate 在 merge 之前, config key 不匹配 schema 会 unexpected kwarg).
-    import sync_agent_config as sac
     from agent_runtime.agent_definition import AgentDefinition
+
+    import sync_agent_config as sac
     cfg = {
         "models": {"chat": "Qwen3.5-9B-4bit"},
         "comfyui": {"tts_http_voice": "Cherry"},
@@ -1655,9 +1655,10 @@ class _FakeRpcClient:
 
 def test_sync_graphs_idempotent_name_dedup(tmp_path, monkeypatch):
     # sync_graphs 契约: 按 name 去重, 同名旧 graph 先删后建, 重复运行不膨胀.
-    import sync_graphs as sg
-    import glob as _glob
     import asyncio as _asyncio
+    import glob as _glob
+
+    import sync_graphs as sg
 
     gdir = tmp_path / "graphs"
     gdir.mkdir()
@@ -1691,9 +1692,10 @@ def test_sync_graphs_idempotent_name_dedup(tmp_path, monkeypatch):
 def test_sync_graphs_name_collision_regression(tmp_path, monkeypatch):
     # 回归: 两个文件 name 相同 → sync 后 store 里该 name 应只剩 1 份.
     # 对应 graphs/douyin_comment_reply_winner.json 曾 name=douyin_comment_reply.
-    import sync_graphs as sg
-    import glob as _glob
     import asyncio as _asyncio
+    import glob as _glob
+
+    import sync_graphs as sg
 
     gdir = tmp_path / "graphs"
     gdir.mkdir()
@@ -1717,9 +1719,10 @@ def test_sync_graphs_name_collision_regression(tmp_path, monkeypatch):
 def test_sync_graphs_cron_backfill(tmp_path, monkeypatch):
     # 回归: sync 重建 graph 后 graph_id 变, 须回填关联 cron job 的 graph_id.
     # 8-20 11:05 根因: cron 绑死旧 id -> Graph not found -> 发布失败.
-    import sync_graphs as sg
-    import glob as _glob
     import asyncio as _asyncio
+    import glob as _glob
+
+    import sync_graphs as sg
 
     gdir = tmp_path / "graphs"
     gdir.mkdir()
@@ -1864,6 +1867,7 @@ def test_mlx_health_detects_auth_and_unreachable(monkeypatch):
 def test_reload_json_config_picks_up_change(tmp_path, monkeypatch):
     # A1: reload_json_config 重读 douyin_config.json, 改配置不需重启进程.
     import importlib
+
     from douyin_tools import config as cmod
     cfg = tmp_path / "cfg.json"
     cfg.write_text(json.dumps({"scheduler": {"peak_windows": ["9-10"]}}))
@@ -1918,7 +1922,7 @@ def test_extract_narration_segments_fallback_split():
 def test_parse_script_repr_string_fallback():
     # AgentRuntime 扁平插值把 dict 变量按 Python repr 注入 (单引号 {'k':'v'}),
     # 非合法 JSON -> parse_script 走 ast.literal_eval 回退解析出 script dict.
-    from douyin_tools.script_helpers import parse_script, extract_prompts, extract_narration
+    from douyin_tools.script_helpers import extract_narration, extract_prompts, parse_script
 
     script = {
         "title": "木星大红斑",
@@ -1943,8 +1947,6 @@ def test_parse_script_repr_string_fallback():
 
 def test_compose_duration_proportional():
     # ffmpeg_compose 按旁白片段字数比例分配每镜帧数 (音画同步), 非等分.
-    from douyin_tools.ffmpeg_compose import FfmpegComposeTool
-    tool = FfmpegComposeTool()
     total_frames = 240
     # 镜头0片段4字, 镜头1片段16字 -> 镜头1应分到约4倍帧数.
     weights = [4, 16]
@@ -1960,7 +1962,7 @@ def test_compose_duration_proportional():
 def test_compose_tempdir_cleaned_after_render(tmp_path, monkeypatch):
     # A2: 临时帧目录必须渲染后清理 (单条视频数千帧 png + 中间 mp4, 不清则磁盘膨胀).
     import os
-    import numpy as np
+
     from douyin_tools import ffmpeg_compose as fc
 
     captured = {"tmp": None}
@@ -2000,6 +2002,7 @@ def test_compose_tempdir_cleaned_after_render(tmp_path, monkeypatch):
 def test_comfyui_image_default_size_vertical():
     # 配图默认改竖屏 1080x1920 (抖音9:16), 根治方图裁切主体丢失.
     import inspect
+
     from douyin_tools.comfyui_produce import ComfyUIImageTool
     sig = inspect.signature(ComfyUIImageTool.execute)
     assert sig.parameters["size"].default == "1080x1920"
@@ -2030,6 +2033,7 @@ def test_web_image_search_extract_celestial():
 def test_web_image_search_parse_queries_script_json():
     # script_json(dict) -> extract_prompts 取 img_prompt -> 抽天体词列表.
     import json
+
     from douyin_tools.web_image_search import WebImageSearchTool
     tool = WebImageSearchTool()
     script = {
@@ -2046,6 +2050,7 @@ def test_web_image_search_parse_queries_script_json():
 def test_web_image_search_parse_queries_list():
     # 裸关键词列表/逗号串 -> query 列表.
     import json
+
     from douyin_tools.web_image_search import WebImageSearchTool
     tool = WebImageSearchTool()
     assert tool._parse_queries(json.dumps(["mars", "earth"])) == ["mars", "earth"]
@@ -2054,7 +2059,9 @@ def test_web_image_search_parse_queries_list():
 
 def test_web_image_search_search_nasa_mock(monkeypatch):
     # mock NASA search -> metadata JSON -> 选 large jpg. 验证 _fetch_one 全链路 + enough.
-    import asyncio, json
+    import asyncio
+    import json
+
     from douyin_tools.web_image_search import WebImageSearchTool
     tool = WebImageSearchTool()
     items = [{
@@ -2072,7 +2079,9 @@ def test_web_image_search_search_nasa_mock(monkeypatch):
 
 def test_web_image_search_fallback_empty(monkeypatch):
     # NASA 返回空 -> image_paths=[] enough=false (触发 Graph C 回退生成图).
-    import asyncio, json
+    import asyncio
+    import json
+
     from douyin_tools.web_image_search import WebImageSearchTool
     tool = WebImageSearchTool()
     monkeypatch.setattr(WebImageSearchTool, "_search_nasa", lambda self, q: _async_val([]))
@@ -2084,7 +2093,9 @@ def test_web_image_search_fallback_empty(monkeypatch):
 
 def test_web_image_search_skip_copyright(monkeypatch):
     # metadata 含 copyright 字段 -> 跳过该 item 换下一个 (只下公共领域图).
-    import asyncio, json
+    import asyncio
+    import json
+
     from douyin_tools.web_image_search import WebImageSearchTool
     tool = WebImageSearchTool()
     items = [
@@ -2112,6 +2123,7 @@ def test_compose_planet_fallback(tmp_path, monkeypatch):
     # legit 暗调带星点 mean~0 std~11. mean 区分暗/亮, std 区分纯黑/带星点.
     import cv2
     import numpy as np
+
     from douyin_tools import ffmpeg_compose as fmod
     monkeypatch.setattr(fmod, "IMAGE_DIR", str(tmp_path), raising=False)
     planet = tmp_path / "_planet_cover.png"
@@ -2163,6 +2175,7 @@ def test_cron_path_integration_bindings():
     # 3) cron 热路径 auto_publish graph 含 C1 修复的 topic_gen 补货节点 (cron 不传 topic 也能自产).
     import glob
     import re
+
     import sync_graphs as sg
 
     # 1) 8 cron job 表达式 5 字段合法.
@@ -2208,7 +2221,7 @@ def test_cron_path_integration_bindings():
 
 def test_scheduler_parse_windows_sorted():
     # L5: peak_windows 配置乱序时, _parse_peak_windows 必须排序, 否则 _next_window 漏选下一个窗口.
-    from douyin_tools.publish_scheduler import _parse_peak_windows, PublishSchedulerTool
+    from douyin_tools.publish_scheduler import PublishSchedulerTool, _parse_peak_windows
     out = _parse_peak_windows(["20-21", "9-10", "14-15"])
     assert out == [(9, 10), (14, 15), (20, 21)], f"未排序: {out}"
     # _next_window 取首个未到的窗口, 乱序配置下也正确 (10:30 在 9-10 之后, 应指 14:00 而非 9:00).
@@ -2276,6 +2289,7 @@ def test_fetch_comments_real_id_dedup():
     # L1: JS 返回 id 字段 (真实 comment_id 或 user|text|ts 三元组), 同文不同人评论不误判重复.
     # _parse_comments 内部 python 循环用 r["id"] 去重; 同文不同人 id 不同 -> 两条都保留.
     import asyncio
+
     from douyin_tools.douyin_fetch_comments import DouyinFetchCommentsTool
     raw = [
         {"text": "太震撼了", "user": "用户A", "id": "real_id_1"},
@@ -2298,6 +2312,7 @@ def test_fetch_comments_real_id_dedup():
 def test_fetch_comments_dedup_same_id():
     # L1: 相同真实 id 的重复评论 (DOM 重复遍历命中) 去重, 只留一条.
     import asyncio
+
     from douyin_tools.douyin_fetch_comments import DouyinFetchCommentsTool
     raw = [
         {"text": "好看", "user": "用户A", "id": "dup_id"},
@@ -2316,7 +2331,7 @@ def test_fetch_comments_dedup_same_id():
 def test_ops_health_file_alerts(tmp_path, monkeypatch):
     # M2: ops_health 检测关键文件缺失/过期. 用临时 queue+ops 目录模拟停摆态.
     import asyncio
-    import time
+
     import douyin_tools.ops_health as mod
     qdir = tmp_path / "queue"
     odir = tmp_path / "ops"
@@ -2359,7 +2374,6 @@ def test_ops_health_file_alerts(tmp_path, monkeypatch):
 
 
 def test_ops_health_vid_backfill_rate(tmp_path, monkeypatch):
-    import asyncio
     import douyin_tools.ops_health as mod
     monkeypatch.setattr(mod, "QUEUE_DIR", str(tmp_path), raising=False)
     pub = tmp_path / "published"
@@ -2479,7 +2493,6 @@ async def test_e8_queue_ops_enqueue_repr_script(tmp_path, monkeypatch):
 async def test_e8_mlx_image_script_first(tmp_path, monkeypatch):
     # E8: mlx_image.execute 应 parse_script 优先 (契约同 comfyui_produce),
     # 传整个 script_json(dict repr) 时提 scenes[].img_prompt, 不再 _parse_list 把 dict 分段.
-    from douyin_tools import mlx_image as mmod
     t = MlxImageTool()
     called = {"gen": []}
 
@@ -2503,6 +2516,7 @@ def test_ops_health_stale_inflight_alert(tmp_path, monkeypatch):
     # 审计 0908 F2 ④: inflight 项 age 超 2×LEASE_TTL -> 告警 (发布进程崩溃/卡死, 重复发布窗口开).
     import asyncio
     import time
+
     import douyin_tools.ops_health as mod
     qdir = tmp_path / "queue"
     odir = tmp_path / "ops"
@@ -2578,8 +2592,8 @@ async def test_snapshot_propagates_estimated_flag(tmp_path, monkeypatch):
     # M3-4: perf_track._snapshot 据 plays_source=estimated 传播 row.estimated 标志.
     # 旧实现 row dict 无 estimated 字段 -> perf_analyze 排除逻辑永不触发 (M0 止血漏网).
     import douyin_tools.perf_track as pmod
-    from douyin_tools.perf_track import PerfTrackTool
     from douyin_tools import history_store
+    from douyin_tools.perf_track import PerfTrackTool
     hist = tmp_path / "stats_history.jsonl"
     est = tmp_path / "stats_estimated.jsonl"
     monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
@@ -2598,8 +2612,8 @@ async def test_snapshot_propagates_estimated_flag(tmp_path, monkeypatch):
     assert d["status"] == "snapshotted"
     assert d["real_count"] == 1
     assert d["estimated_count"] == 1
-    real_rows = [json.loads(l) for l in hist.read_text().strip().split("\n") if l]
-    est_rows = [json.loads(l) for l in est.read_text().strip().split("\n") if l]
+    real_rows = [json.loads(ln) for ln in hist.read_text().strip().split("\n") if ln]
+    est_rows = [json.loads(ln) for ln in est.read_text().strip().split("\n") if ln]
     assert real_rows[0]["estimated"] is False
     assert est_rows[0]["estimated"] is True
 
@@ -2607,8 +2621,8 @@ async def test_snapshot_propagates_estimated_flag(tmp_path, monkeypatch):
 async def test_stats_real_estimated_physical_split(tmp_path, monkeypatch):
     # M3-4 §5.6: estimated 行物理隔离到 ESTIMATED_FILE, 不与真实数据同行同表.
     import douyin_tools.perf_track as pmod
-    from douyin_tools.perf_track import PerfTrackTool
     from douyin_tools import history_store
+    from douyin_tools.perf_track import PerfTrackTool
     hist = tmp_path / "stats_history.jsonl"
     est = tmp_path / "stats_estimated.jsonl"
     monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
@@ -2632,12 +2646,12 @@ async def test_stats_real_estimated_physical_split(tmp_path, monkeypatch):
     d = json.loads(res)
     assert d["real_count"] == 5
     assert d["estimated_count"] == 3
-    real_lines = [l for l in hist.read_text().strip().split("\n") if l]
-    est_lines = [l for l in est.read_text().strip().split("\n") if l]
+    real_lines = [ln for ln in hist.read_text().strip().split("\n") if ln]
+    est_lines = [ln for ln in est.read_text().strip().split("\n") if ln]
     assert len(real_lines) == 5
     assert len(est_lines) == 3
-    real_vids = {json.loads(l)["vid"] for l in real_lines}
-    est_vids = {json.loads(l)["vid"] for l in est_lines}
+    real_vids = {json.loads(ln)["vid"] for ln in real_lines}
+    est_vids = {json.loads(ln)["vid"] for ln in est_lines}
     assert real_vids == {"r1", "r2", "r3", "r4", "r5"}
     assert est_vids == {"e1", "e2", "e3"}
 
@@ -2645,8 +2659,8 @@ async def test_stats_real_estimated_physical_split(tmp_path, monkeypatch):
 async def test_estimated_ratio_alert_triggers(tmp_path, monkeypatch):
     # M3-4 §6.2 line 378: estimated 占比 > 20% 阈值 -> team.alert + result.alerted=true.
     import douyin_tools.perf_track as pmod
-    from douyin_tools.perf_track import PerfTrackTool
     from douyin_tools import history_store
+    from douyin_tools.perf_track import PerfTrackTool
     hist = tmp_path / "stats_history.jsonl"
     est = tmp_path / "stats_estimated.jsonl"
     alerts = tmp_path / "team_alerts.jsonl"
@@ -2679,8 +2693,8 @@ async def test_estimated_ratio_alert_triggers(tmp_path, monkeypatch):
 async def test_estimated_ratio_below_threshold_no_alert(tmp_path, monkeypatch):
     # M3-4: ratio <= 阈值不告警.
     import douyin_tools.perf_track as pmod
-    from douyin_tools.perf_track import PerfTrackTool
     from douyin_tools import history_store
+    from douyin_tools.perf_track import PerfTrackTool
     hist = tmp_path / "stats_history.jsonl"
     est = tmp_path / "stats_estimated.jsonl"
     alerts = tmp_path / "team_alerts.jsonl"
@@ -2714,8 +2728,8 @@ async def test_estimated_ratio_below_threshold_no_alert(tmp_path, monkeypatch):
 async def test_perf_analyze_writes_pending_not_winning(tmp_path, monkeypatch):
     # M3-4 §5.6: perf_analyze 写 pending_patterns.json (提案), winning_patterns.json 未动.
     import douyin_tools.perf_analyze as amod
-    from douyin_tools.perf_analyze import PerfAnalyzeTool
     from douyin_tools import history_store
+    from douyin_tools.perf_analyze import PerfAnalyzeTool
     hist = tmp_path / "stats_history.jsonl"
     hist.write_text(json.dumps({"vid": "v1", "plays": 200, "title": "t", "snapshot_at": "2026-09-11 10:00:00"}) + "\n")
     monkeypatch.setattr(history_store, "HISTORY_FILE", str(hist))
@@ -2814,7 +2828,6 @@ async def test_pattern_review_promote_no_pending(tmp_path, monkeypatch):
 
 def test_consumers_still_read_winning(tmp_path, monkeypatch):
     # M3-4 regression: 消费者 (topic_gen) 读 winning_patterns.json, 不读 pending_patterns.json.
-    from douyin_tools import topic_gen as tmod
     from douyin_tools.topic_gen import TopicGenTool
     winning = tmp_path / "winning_patterns.json"
     pending = tmp_path / "pending_patterns.json"
@@ -2850,8 +2863,9 @@ def test_b2_load_published_titles_recent_first(tmp_path, monkeypatch):
 async def test_b11_session_expired_no_claim(tmp_path, monkeypatch):
     # B11 (审计 B11): 旧 _claim_replied 先于 session check -> session 过期 cid 永久消费.
     # 修: 先 session check 再 claim. 验证 session 过期时 REPLIED_FILE 不被写入任何 cid.
-    import douyin_tools.douyin_reply as mod
     import sys
+
+    import douyin_tools.douyin_reply as mod
     rf = str(tmp_path / "replied.json")
     monkeypatch.setattr(mod, "REPLIED_FILE", rf)
     monkeypatch.setattr(mod, "OPS_DATA_DIR", str(tmp_path), raising=False)
@@ -2899,8 +2913,9 @@ async def test_b11_session_expired_no_claim(tmp_path, monkeypatch):
 
 async def test_b11_session_ok_then_claims(tmp_path, monkeypatch):
     # B11 正向: session 有效时 claim 正常发生 (reorder 不破坏正常路径).
-    import douyin_tools.douyin_reply as mod
     import sys
+
+    import douyin_tools.douyin_reply as mod
     rf = str(tmp_path / "replied.json")
     monkeypatch.setattr(mod, "REPLIED_FILE", rf)
     monkeypatch.setattr(mod, "OPS_DATA_DIR", str(tmp_path), raising=False)
@@ -2939,8 +2954,7 @@ async def test_b11_session_ok_then_claims(tmp_path, monkeypatch):
     t = DouyinReplyTool()
     # _click_text/_click_work/_like_comment/_reply_comment 都走 evaluate -> mock 返回 ok.
     drafts = '[{"id":"c1","text":"hi","safe":true}]'
-    res = await t.execute(drafts_json=drafts, max_reply=5, headless=True)
-    d = json.loads(res)
+    await t.execute(drafts_json=drafts, max_reply=5, headless=True)
     # session 有效 -> claim 发生 -> cid 持久化.
     persisted = json.load(open(rf)).get("replied_ids", [])
     assert "c1" in persisted, "session 有效时应 claim c1"
@@ -2949,9 +2963,10 @@ async def test_b11_session_ok_then_claims(tmp_path, monkeypatch):
 def test_b14_sync_preserves_disabled_cron(tmp_path, monkeypatch):
     # B14 (审计 B14): sync_graphs cron.register 旧硬编码 enabled=True
     # 覆盖运营者手动禁用. 修: 读现有 enabled 状态 preserve.
-    import sync_graphs as sg
-    import glob as _glob
     import asyncio as _asyncio
+    import glob as _glob
+
+    import sync_graphs as sg
 
     gdir = tmp_path / "graphs"
     gdir.mkdir()
@@ -3014,8 +3029,9 @@ async def test_b1_run_queue_publish_requeued_stops():
 
 def test_team_contract_read_returns_contract(tmp_path, monkeypatch):
     # Lead 规划轮强制 read: 返回 team-contract.yaml 内容
-    from douyin_tools.team_contract import TeamContractTool, load_contract
     import yaml
+
+    from douyin_tools.team_contract import TeamContractTool
     contract = {
         "team": "douyin-ops", "version": 1,
         "roles": [{"name": "lead", "tools": ["queue_ops"], "duty": "x"}],
@@ -3040,8 +3056,9 @@ def test_team_contract_read_missing_returns_error(tmp_path, monkeypatch):
 
 
 def test_team_contract_validate_ok(tmp_path, monkeypatch):
-    from douyin_tools.team_contract import TeamContractTool
     import yaml
+
+    from douyin_tools.team_contract import TeamContractTool
     contract = {
         "team": "douyin-ops", "version": 1,
         "roles": [{"name": "lead", "tools": ["queue_ops"], "duty": "x"}],
@@ -3059,8 +3076,9 @@ def test_team_contract_validate_ok(tmp_path, monkeypatch):
 
 
 def test_team_contract_validate_missing_keys(tmp_path, monkeypatch):
-    from douyin_tools.team_contract import TeamContractTool
     import yaml
+
+    from douyin_tools.team_contract import TeamContractTool
     contract = {"team": "douyin-ops", "version": 1}  # missing roles/resources/sla/etc
     p = tmp_path / "tc.yaml"
     p.write_text(yaml.safe_dump(contract), encoding="utf-8")
@@ -3072,8 +3090,9 @@ def test_team_contract_validate_missing_keys(tmp_path, monkeypatch):
 
 
 def test_team_contract_validate_role_missing_duty(tmp_path, monkeypatch):
-    from douyin_tools.team_contract import TeamContractTool
     import yaml
+
+    from douyin_tools.team_contract import TeamContractTool
     contract = {
         "team": "douyin-ops", "version": 1,
         "roles": [{"name": "lead", "tools": ["queue_ops"]}],  # missing duty
@@ -3441,8 +3460,9 @@ async def test_circuit_open_emits_team_alert(tmp_path, monkeypatch):
 
 def test_config_no_hardcoded_user_paths():
     # M3-8: config.py 默认路径不得硬编码 /Users/dahai (注释除外)
-    from douyin_tools import config as cmod
     import inspect
+
+    from douyin_tools import config as cmod
 
     src = inspect.getsource(cmod)
     for line in src.splitlines():

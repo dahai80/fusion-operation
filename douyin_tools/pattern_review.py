@@ -74,7 +74,7 @@ class PatternReviewTool(BaseTool):
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(pending, f, ensure_ascii=False, indent=2)
                 os.replace(tmp_path, WINNING_FILE)
-            os.replace(PENDING_FILE, PENDING_FILE + ".promoted.%d" % int(time.time()))
+            os.replace(PENDING_FILE, f"{PENDING_FILE}.promoted.{int(time.time())}")
         except OSError as exc:
             logger.error("pattern_review promote write failed: %s", exc)
             return json.dumps({"error": "promote write failed", "reason": str(exc)[:200]})
@@ -95,7 +95,7 @@ class PatternReviewTool(BaseTool):
             logger.warning("pattern_review reject no pending file=%s", PENDING_FILE)
             return json.dumps({"error": "no pending patterns to reject", "pending_file": PENDING_FILE})
         try:
-            archive = PENDING_FILE + ".rejected.%d" % int(time.time())
+            archive = f"{PENDING_FILE}.rejected.{int(time.time())}"
             os.replace(PENDING_FILE, archive)
         except OSError as exc:
             logger.error("pattern_review reject failed: %s", exc)

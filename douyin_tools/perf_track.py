@@ -5,8 +5,8 @@ import os
 
 from tools.base import BaseTool
 
-from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config
 from . import history_store
+from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config
 from .history_store import latest_per_vid, load_history, prune_history
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,7 @@ class PerfTrackTool(BaseTool):
             "total": total,
             "snapshot_at": snap_at,
             "severity": "warning",
-            "message": "API 播放量采集失效, estimated 占比 %.0f%% 超阈值 %.0f%%" % (ratio * 100, threshold * 100),
+            "message": f"API 播放量采集失效, estimated 占比 {ratio * 100:.0f}% 超阈值 {threshold * 100:.0f}%",
         }
         history_store.append_alert(alert)
         self._notify_daemon_alert(alert)
@@ -172,8 +172,10 @@ class PerfTrackTool(BaseTool):
         # best-effort daemon team.alert RPC (尚不存在则降级文件告警, 复用 ops_health:185 模式).
         try:
             import asyncio
-            from .config import AGENT_STUDIO_SOCKET
+
             from agent_runtime.sdk.client import AgentClient
+
+            from .config import AGENT_STUDIO_SOCKET
             client = AgentClient(socket_path=AGENT_STUDIO_SOCKET)
             asyncio.wait_for(client.call("team.alert", alert), timeout=5)
             logger.info("data_gate alert sent via daemon RPC")

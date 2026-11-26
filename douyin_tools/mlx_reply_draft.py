@@ -1,10 +1,10 @@
 import json
 import logging
 
-from . import config
-from .config import mlx_headers
-from .resilient_http import post_json
 from tools.base import BaseTool
+
+from . import config
+from .resilient_http import post_json
 
 logger = logging.getLogger(__name__)
 

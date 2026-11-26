@@ -6,8 +6,8 @@ import re
 
 from tools.base import BaseTool
 
-from .config import DOUYIN_MANAGE_URL, DOUYIN_HOME_URL
-from .playwright_profile import profile_lock, launch_with_retry
+from .config import DOUYIN_HOME_URL, DOUYIN_MANAGE_URL
+from .playwright_profile import launch_with_retry, profile_lock
 
 logger = logging.getLogger(__name__)
 
@@ -175,29 +175,29 @@ class DouyinStatsTool(BaseTool):
         except Exception as e:
             logger.warning("page stats inner_text failed: %s", e)
             return []
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
         stats = []
         labels = {"播放": "plays", "点赞": "likes", "评论": "comments", "分享": "shares"}
         status_words = {"已发布", "未发布", "审核中", "已删除", "私密", "公开", "可见"}
         cur = None
-        for l in lines:
-            if l in labels:
-                cur = labels[l]
+        for ln in lines:
+            if ln in labels:
+                cur = labels[ln]
                 if cur == "plays":
                     stats.append({"title": "", "plays": 0, "likes": 0, "comments": 0, "shares": 0})
                 continue
-            if cur and self._is_num(l):
+            if cur and self._is_num(ln):
                 if stats:
-                    stats[-1][cur] = self._to_num(l)
+                    stats[-1][cur] = self._to_num(ln)
                 cur = None
                 continue
             cur = None
-            if l in status_words:
+            if ln in status_words:
                 continue
-            if re.match(r"^\d+:\d{2}$", l):
+            if re.match(r"^\d+:\d{2}$", ln):
                 continue
-            if len(l) > 15 and stats and not stats[-1].get("title"):
-                stats[-1]["title"] = l[:60]
+            if len(ln) > 15 and stats and not stats[-1].get("title"):
+                stats[-1]["title"] = ln[:60]
         logger.info("page stats parsed blocks=%d", len(stats))
         return [s for s in stats if s.get("title")]
 
@@ -242,7 +242,9 @@ class DouyinStatsTool(BaseTool):
         # (避免短公共前缀误连). 仍找不到返回 None.
         if not title or not page_stats:
             return None
-        norm = lambda s: "".join(s.split()).strip()
+        def norm(s):
+            return "".join(s.split()).strip()
+
         nt = norm(title)
         if not nt:
             return None

@@ -6,9 +6,9 @@ import uuid
 
 from tools.base import BaseTool
 
-from .config import QUEUE_DIR, ensure_dirs, LEASE_TTL
-from .script_helpers import parse_script
 from . import queue_store
+from .config import LEASE_TTL, QUEUE_DIR, ensure_dirs
+from .script_helpers import parse_script
 
 logger = logging.getLogger(__name__)
 

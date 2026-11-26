@@ -2,10 +2,11 @@ import json
 import logging
 import os
 
-from . import config
-from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, mlx_headers
-from .resilient_http import post_json
 from tools.base import BaseTool
+
+from . import config
+from .config import OPS_DATA_DIR, QUEUE_DIR, ensure_dirs
+from .resilient_http import post_json
 
 logger = logging.getLogger(__name__)
 

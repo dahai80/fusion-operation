@@ -2,8 +2,9 @@ import datetime
 import json
 import logging
 
-from .config import get_json_config
 from tools.base import BaseTool
+
+from .config import get_json_config
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ class PublishSchedulerTool(BaseTool):
 
     @staticmethod
     def _next_window(cur, wins):
-        for s, e in wins:
+        for s, _e in wins:
             if cur < s * 60:
                 return f"{s:02d}:00"
         if wins:

@@ -3,7 +3,6 @@ import logging
 import os
 
 import httpx
-
 from fusion_core.config import client_key, profile, resolve_api_key
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ def _load_json_config():
     # 声明式配置层: 用户改 douyin_config.json 即可调整策略, 不改代码.
     # 优先级: 环境变量 > JSON 配置 > 硬编码默认 (调用方按此顺序取舍).
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             data = json.load(f)
         logger.info("config: loaded %s keys=%s", CONFIG_FILE, list(data.keys()))
         return data

@@ -2,10 +2,11 @@ import json
 import logging
 import os
 
-from . import config
-from .config import OPS_DATA_DIR, ensure_dirs, get_json_config, mlx_headers
-from .resilient_http import post_json, CircuitOpenError
 from tools.base import BaseTool
+
+from . import config
+from .config import OPS_DATA_DIR, ensure_dirs, get_json_config
+from .resilient_http import post_json
 
 logger = logging.getLogger(__name__)
 

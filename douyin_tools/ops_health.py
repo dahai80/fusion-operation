@@ -6,7 +6,7 @@ import time
 
 from tools.base import BaseTool
 
-from .config import OPS_DATA_DIR, QUEUE_DIR, AGENT_STUDIO_SOCKET, LEASE_TTL, ensure_dirs, get_json_config
+from .config import AGENT_STUDIO_SOCKET, LEASE_TTL, OPS_DATA_DIR, QUEUE_DIR, ensure_dirs, get_json_config
 
 logger = logging.getLogger(__name__)
 
@@ -207,8 +207,8 @@ class OpsHealthTool(BaseTool):
             res = await asyncio.wait_for(
                 authed_call("cron.list", {}, AGENT_STUDIO_SOCKET), timeout=10
             )
-        except asyncio.TimeoutError:
-            raise RuntimeError("cron.list timed out >10s (daemon hang?)")
+        except TimeoutError:
+            raise RuntimeError("cron.list timed out >10s (daemon hang?)") from None
         if res.get("error"):
             raise RuntimeError(f"cron.list failed: {res['error']}")
         jobs = res.get("jobs", [])
@@ -224,7 +224,7 @@ class OpsHealthTool(BaseTool):
                     authed_call("cron.list_executions", {"job_id": jid, "limit": 50}, AGENT_STUDIO_SOCKET), timeout=10
                 )
                 runs = er.get("executions", []) or []
-            except (Exception, asyncio.TimeoutError) as e:
+            except (TimeoutError, Exception) as e:
                 logger.warning("cron.list_executions failed job=%s: %s", jid, e)
             # 审计 P3-7: int(executed_at) 假定 int, 非数字/None 崩 -> 用 _safe_int 守卫.
             recent = [r for r in runs if self._safe_int(r.get("executed_at")) >= cutoff]

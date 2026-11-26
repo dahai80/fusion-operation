@@ -13,7 +13,7 @@ CONFIG_FILE = os.environ.get(
 
 
 def _load_config():
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    with open(CONFIG_FILE, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -115,7 +115,7 @@ def sync():
     if not os.path.exists(manifest_path):
         logger.error("manifest 不存在: %s", manifest_path)
         return 1
-    with open(manifest_path, "r", encoding="utf-8") as f:
+    with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
     tool_configs = build_tool_configs(cfg)
     definition = build_definition(manifest, tool_configs)
